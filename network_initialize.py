@@ -4,6 +4,7 @@ import tools.numpy_cal as npcal
 import tools.coord_sys as crd
 import tools.shp_process as shp
 import tools.networkX_manipulate as ntx
+import tools.MeanShift_accelerate as ms_acc
 
 # 1. Points csv, index field name, coordinate field names, coordinate system’s EPSG serial
 # (accept multiple inputs) 
@@ -14,19 +15,20 @@ pt_csv_param = ((r'grid_centroids.csv', 'Id', ('X', 'Y'), 'epsg:32651'),
 
 # 2. Lines shapefile, index field name, direction field name (optional, 0 for no / 1 for has)
 # (only accept one file)
-line_shp_path = r'D:\2024Summer\GIS\classified_L3.shp'
-line_idx = 'id'
-dir_field = 'Direction' ### if left blank, then will produce an undirected graph
+line_shp_path = r'classified_L3.shp'
+line_field_param = ['link_id', 'Direction']    ### if direction field name not provided, then will produce an undirected graph
+# must be list object
 
 # 3. Targeted EPSG serial
 # (Must be a projection coordinate system)
 target_crs = "epsg:32651"
 
 # 4. Parameters for multi-thread acceleration
+shp_max_worker = 16
 acc_param = {'buffer_range':1500,       # meter
              'blocks max thread': 16,
              'single_max_thread': 128,
-             'bandwidth': 2000,         # meter, optional, 把多少米范围内的激发源对象视为同一block
+             'bandwidth': 2000,         # meter, optional, 把多少米范围内的激发源对象视为同一block以参与后续运算
              'min_block': 2             # optional,一个block下至少有多少个点（至少为1） 
              }
 
@@ -39,13 +41,23 @@ if __name__ == "__main__":
     lock = threading.Lock()
     error_flag = threading.Event()
     active_threads = 0
-
-    loader = shp.PointLoader(pt_csv_param, target_crs, chunksize=10000)
-    gdf = loader.load_all_csvs()
-    pt_crd_np = gdf.geometry.to_numpy()
-    print(gdf.shape)
+    
+    # result = {}
+    # shp.initialize_points(pt_csv_param, target_crs, result)
+    # gdf = result['points']
+    # print(result['points'].shape)
+    # coords_clusters, orphans_clusters, pt_coordinates = ms_acc.point_cluster(acc_param['bandwidth'], acc_param['min_block'], gdf.geometry)
+    
+    # print(pt_coordinates.shape)
+    # print(len(coords_clusters))
+    # print(len((orphans_clusters)))
+    print("Initializing Files ... ")
+    gdf = shp.LineLoader(line_shp_path, line_field_param, target_crs, shp_max_worker)
+    gdf = gdf.load_lines()
+    print("Saving Files ... ")
+    gdf.to_file("tmp.shp", driver="ESRI Shapefile", encoding='utf-8')
     exit()
-    result = {}
+    
     print("Initializing Files ... ")
     thread1 = threading.Thread(target=shp.initialize_points, args=(pt_csv_param, target_crs, result,
                                                                    acc_param.bandwidth, acc_param.min_block))
