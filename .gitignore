@@ -1,1 +1,12 @@
 original/*
+test/*
+*.cpg
+*.prj
+*.qmd
+*.shp
+*.shx
+*.csv
+*.docx
+*.dbf
+*.qix
+*.pyc
