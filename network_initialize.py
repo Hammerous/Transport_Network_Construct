@@ -9,9 +9,11 @@ import tools.MeanShift_accelerate as ms_acc
 # 1. Points csv, index field name, coordinate field names, coordinate system’s EPSG serial
 # (accept multiple inputs) 
 # (Although it is rationally acceptable without a point input, detective points are requested for this mission)
-pt_csv_param = ((r'grid_centroids.csv', 'Id', ('X', 'Y'), 'epsg:32651'),
+pt_csv_param = [(r'grid_centroids.csv', 'Id', ('X', 'Y'), 'epsg:32651'),
                 (r'bus_stops.csv', 'Bus_Id', ('X', 'Y'), 'epsg:4326'),
-                (r'subway_stops.csv', 'Sub_Id', ('X', 'Y'), 'epsg:32651'))
+                (r'subway_stops.csv', 'Sub_Id', ('X', 'Y'), 'epsg:32651')]
+
+# pt_csv_param = [(r'subway_stops.csv', 'Sub_Id', ('X', 'Y'), 'epsg:32651')]
 
 # 2. Lines shapefile, index field name, direction field name (0 for no / 1 for has)
 # (only accept one file)
@@ -23,36 +25,37 @@ line_dir_field = 'Direction'
 # (Must be a projection coordinate system)
 target_crs = "epsg:32651"
 
-# 4. Parameters for multi-thread acceleration
-shp_max_worker = 16
-acc_param = {'buffer_range':1500,       # meter
-             'blocks max thread': 16,
-             'single_max_thread': 128,
-             'bandwidth': 2000,         # meter, optional, 把多少米范围内的激发源对象视为同一block以参与后续运算
-             'min_block': 2             # optional,一个block下至少有多少个点（至少为1） 
-             }
+# 4. Buffer range to intersect line networks
+buffer_range = 1500       # meter
+
+# 5. Parameters for multi-thread acceleration
+acc_param = {
+    'blocks max thread': 16,
+    'single max thread': 128,
+    'bandwidth': 2000,         # meter, optional, 把多少米范围内的激发源对象视为同一block以参与后续运算
+    'min_block': 2             # optional,一个block下至少有多少个点（至少为1） 
+}
 
 def initialize_points(pt_csv_param: dict, target_crs: str, bandwidth=None, min_block=None):
     # Initialize the PointsLoader with CSV parameters and chunk size
     loader = shp.PointLoader(pt_csv_param, target_crs, chunksize=1e4)
-    gdf = loader.load_all_csvs()
+    loader.load_all_csvs()
     print("Point Files Loaded !!!")
-    coords_clusters, orphans_clusters, pt_coordinates = ms_acc.point_cluster(bandwidth, min_block, gdf.geometry)
+    coords_clusters, orphans_clusters = ms_acc.point_cluster(bandwidth, min_block,\
+                                                             loader.gdf.geometry.get_coordinates().to_numpy())
     # Return a dictionary with the results
     if coords_clusters:
         print("Points Clustered !!!")
     return {
-        'points': gdf,
-        'pt_coordinates': pt_coordinates,
+        'points': loader.gdf,
         'coords_clusters': coords_clusters,
         'orphans_clusters': orphans_clusters
     }
 
 def initialize_lines(line_shp_path: str, idx_fields: list, target_crs: str):
-    lines = shp.LineLoader(line_shp_path, idx_fields, target_crs, shp_max_worker)
+    lines = shp.LineLoader(line_shp_path, idx_fields, target_crs)
     lines.load_lines()
     print("Line File Loaded, Saving ...")
-    lines.gdf.to_file("lines.shp", driver="ESRI Shapefile", encoding='utf-8')
     # Save dictionary as a JSON file
     with open("line_nodes.json", "w", encoding="utf-8") as f:
         json.dump(lines.node_dict, f, ensure_ascii=False, indent=4)
@@ -63,81 +66,82 @@ def initialize_lines(line_shp_path: str, idx_fields: list, target_crs: str):
         'count': len(lines.node_dict)
     }
 
+def find_projections(pt_idxs, buffer_range):
+    global lines, points, processed_points
+    pt_geom = points.iloc[pt_idxs].geometry
+    status, nearby_lines_index, nearby_lines_arr = shp.nearby_lines(lines.geometry, pt_geom, buffer_range)
+    processed_points += pt_idxs.shape[0]
+    print(f'\rPoint in process: {processed_points}/{points.shape[0]}               ', end='')
+    if status:
+        ### all calculation is performed under UTM projection coordinate system
+        pt_arr = pt_geom.geometry.get_coordinates().to_numpy()
+        min_indices, attr_arr = npcal.find_nearest_intersect(pt_arr, nearby_lines_arr)
+        return npcal.np.column_stack((pt_idxs, nearby_lines_index[min_indices])), attr_arr
+    else:
+        return pt_idxs, None
+
 if __name__ == "__main__":
     dirpath = os.path.dirname(os.path.abspath(__file__))
     os.chdir(dirpath)
     start_time = time.time()
 
     print("Initializing Files ...")
-
     # Use ThreadPoolExecutor to manage threads
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         future_points = executor.submit(initialize_points, pt_csv_param, target_crs,
                                           acc_param['bandwidth'], acc_param['min_block'])
         future_lines = executor.submit(initialize_lines, line_shp_path, [line_id_field, line_dir_field], target_crs)
-
         try:
-            points_result = future_points.result()
-            lines_result = future_lines.result()
+            # Merge results from both functions
+            points = future_points.result().get('points')
+            coords_clusters = future_points.result().get('coords_clusters')
+            orphans_clusters = future_points.result().get('orphans_clusters')
+            lines = future_lines.result().get('lines')
+            print(f"{points.shape[0]} Points, {lines.shape[0]} Lines and {future_lines.result().get('count')} Nodes Loaded")
+            del future_points, future_lines
         except Exception as e:
             print(f"An error occurred: {e}")
             exit(1)
 
-    # Merge results from both functions
-    points = points_result.get('points')
-    pt_coordinates = points_result.get('pt_coordinates')
-    coords_clusters = points_result.get('coords_clusters')
-    orphans_clusters = points_result.get('orphans_clusters')
+    # Launch threads for projection computations.
+    results_list = []
+    processed_points = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=acc_param['blocks max thread']) as executor:
+        futures = [executor.submit(find_projections, pt_idxs, buffer_range)
+                   for pt_idxs in coords_clusters.values()]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                results_list.append(future.result())
+            except Exception as exc:
+                print(f"Exception in thread: {exc}")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=acc_param["single max thread"]) as executor:
+        futures = [executor.submit(find_projections, pt_idxs, buffer_range)
+                   for pt_idxs in orphans_clusters.values()]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                results_list.append(future.result())
+            except Exception as exc:
+                print(f"Exception in orphan processing thread: {exc}")
 
-    lines = lines_result.get('lines')
-    count = lines_result.get('count')
-
-    print(f'{points.shape[0]} Points, {lines.shape[0]} Lines and {count} Nodes Loaded')
+    idxs_list = []
+    attrs_list = []
+    for idx_arr, attr_arr in results_list:
+        if attr_arr is None:
+            print(f"Point: {points.iloc[idx_arr].index} not connected to network")
+        else:
+            idxs_list.append(idx_arr)
+            attrs_list.append(attr_arr)
+    idxs_list = npcal.np.concatenate(idxs_list)
+    attrs_list = npcal.np.concatenate(attrs_list)
+    print("\nSaving Files ...")
+    prj_gdf = shp.gpd.GeoDataFrame(attrs_list, geometry=shp.gpd.points_from_xy(attrs_list[:,2],attrs_list[:,3]),\
+                                   columns=['prj_length', 'distance', 'X', 'Y'], crs=target_crs)
+    prj_gdf['pt_id'] = points.iloc[idxs_list[:,0]].index
+    prj_gdf['line_id'] = lines.iloc[idxs_list[:,1]][line_id_field].values
+    prj_gdf.to_file("prj_pts.shp", driver="ESRI Shapefile", encoding='utf-8')
+    lines.to_file("lines.shp", driver="ESRI Shapefile", encoding='utf-8')
     exit()
-    print('Processing Point Serials ...')
-    points['min_dist'] = np.inf
-    count = 0
-    threads = []
-    # 创建一个队列来收集所有线程的结果
-    result = Queue()
-    def start_thread(*args):
-        thread = threading.Thread(target=process_points, args=args)
-        thread.start()
-        return thread
-
-    if -1 in orphans_clusters:
-        max_threads = single_max_thread
-        for pt_idx in orphans_clusters[-1]:
-            if error_flag.is_set():
-                break
-            while active_threads >= max_threads:
-                time.sleep(0.1)
-            count += 1
-            print(f'\rPoint in process: {count}/{points.shape[0]}               ', end='')
-            threads.append(start_thread(pt_coordinates[pt_idx:pt_idx+1, :], pt_idx))
-            active_threads += 1
-    else:
-        max_threads = blocks_max_thread
-        for label_code, pt_idx_arr in coords_clusters.items():
-            if error_flag.is_set():
-                break
-            while active_threads >= max_threads:
-                time.sleep(0.1)
-            count += pt_idx_arr.shape[0]
-            print(f'\rPoint Blocks Stage-1 in process: {count}/{points.shape[0]}', end='')
-            threads.append(start_thread(pt_coordinates[pt_idx_arr], pt_idx_arr))
-            active_threads += 1
-
-        max_threads = single_max_thread
-        for label_code, pt_idx_arr in orphans_clusters.items():
-            if error_flag.is_set():
-                break
-            while active_threads >= max_threads:
-                time.sleep(0.1)
-            count += pt_idx_arr.shape[0]
-            print(f'\rPoint Blocks Stage-2 in process: {count}/{points.shape[0]}               ', end='')
-            threads.append(start_thread(pt_coordinates[pt_idx_arr], pt_idx_arr))
-            active_threads += 1
 
     print("\nJoining child threads ...")
     for thread in threads:

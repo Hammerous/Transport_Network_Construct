@@ -4,7 +4,7 @@ from pyproj import CRS
 from shapely.geometry import LineString
 
 class PointLoader:
-    def __init__(self, pt_csv_params, target_crs, chunksize=10000, max_workers=8):
+    def __init__(self, pt_csv_params, target_crs, chunksize=10000):
         """
         Initialize the loader with CSV parameters, target CRS, and chunk size.
 
@@ -17,7 +17,7 @@ class PointLoader:
         self.pt_csv_params = pt_csv_params
         self.target_crs = CRS(target_crs)
         self.chunksize = chunksize
-        self.max_workers = max_workers
+        self.gdf = None
 
     def process_csv(self, file_param):
         """
@@ -74,53 +74,21 @@ class PointLoader:
         Returns:
             A single combined GeoDataFrame containing all processed points.
         """
-        gdf_list = []
+        self.gdf = []
         # Process each CSV sequentially.
         for param in self.pt_csv_params:
             print(f"\r{param[0]} loaded ...             ", end='')
-            gdf_list.append(self.process_csv(param))
+            self.gdf.append(self.process_csv(param))
         print()
         # Concatenate all GeoDataFrames.
-        combined_gdf = pd.concat(gdf_list, ignore_index=True)
-        combined_gdf["id"] = combined_gdf["id"].astype(str)
+        self.gdf = pd.concat(self.gdf, ignore_index=True)
+        self.gdf["id"] = self.gdf["id"].astype(str)
         
         # Check for duplicate IDs.
-        if combined_gdf["id"].duplicated().any():
+        if self.gdf["id"].duplicated().any():
             raise ValueError("Duplicate IDs found in the combined GeoDataFrame.")
         else:
-            combined_gdf = combined_gdf.set_index("id")
-        
-        return combined_gdf
-
-    # def load_all_csvs(self):
-    #     """
-    #     Process all CSV files concurrently, verify no duplicate IDs exist across files,
-    #     and concatenate them into a single GeoDataFrame.
-
-    #     Raises:
-    #         ValueError: If duplicate IDs are found in the combined GeoDataFrame.
-        
-    #     Returns:
-    #         A single combined GeoDataFrame containing all processed points.
-    #     """
-    #     gdf_list = []
-    #     with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-    #         # Process each CSV concurrently.
-    #         futures = [executor.submit(self.process_csv, param) for param in self.pt_csv_params]
-    #         for future in concurrent.futures.as_completed(futures):
-    #             gdf_list.append(future.result())
-        
-    #     # Concatenate all GeoDataFrames.
-    #     combined_gdf = pd.concat(gdf_list, ignore_index=True)
-    #     combined_gdf["id"] = combined_gdf["id"].astype(str)
-        
-    #     # Check for duplicate IDs.
-    #     if combined_gdf["id"].duplicated().any():
-    #         raise ValueError("Duplicate IDs found in the combined GeoDataFrame.")
-    #     else:
-    #         combined_gdf.set_index("id")
-        
-    #     return combined_gdf
+            self.gdf.set_index("id", inplace=True)
 
 class LineLoader:
     """
@@ -128,7 +96,7 @@ class LineLoader:
     break each into individual line segments using multi-threading, and extend each
     segment with specified attribute fields from the original data.
     """
-    def __init__(self, shp_path, shp_param, target_crs, max_workers=8):
+    def __init__(self, shp_path, shp_param, target_crs):
         """
         Initializes the LineLoader instance.
         
@@ -148,7 +116,6 @@ class LineLoader:
         # If source and target CRS differ, perform coordinate transformation.
         if self.gdf.crs != target_crs:
             self.gdf = self.gdf.to_crs(target_crs)
-        self.max_workers = max_workers
         self.node_dict = {}
         self.node_count = 0
 
@@ -180,7 +147,7 @@ class LineLoader:
         segments = [
             {
                 'geometry': LineString((coords[i], coords[i+1])),
-                'coord_list': (coords[i], coords[i+1]),
+                #'coordinates': (coords[i], coords[i+1]),
                 'encoding': (encoded_coords[i],encoded_coords[i+1]),
                 **attributes
             }
@@ -239,16 +206,46 @@ class LineLoader:
         # reverse the sequence of line nodes. Although this dict will no longer be used, 
         self.node_dict = {v: k for k, v in self.node_dict.items()}
 
-def get_nearby(lines, pt_arr, buffer_distance):
-    global array_lines, all_line_vecs
-    Status = False
-    line_vectors = False
-    line_vecs = False
+def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float):
+    """
+    Determines which line geometries intersect the union of buffered point geometries.
 
-    buffer = gpd.GeoDataFrame(geometry=gpd.points_from_xy(pt_arr[:,0], pt_arr[:,1]),crs=lines.crs).buffer(buffer_distance).union_all()
-    nearby_lines_index = lines[lines.intersects(buffer)].index.to_numpy()
-    if nearby_lines_index.shape[0]:
-        Status = True
-        line_vectors = array_lines[nearby_lines_index]
-        line_vecs = all_line_vecs[nearby_lines_index]
-    return Status, line_vectors, line_vecs, nearby_lines_index
+    This function creates a buffer around each point in the provided `points_geom` using the specified
+    `buffer_distance`. It then computes the union of all these buffers to form a single geometry. Finally,
+    it checks which line features in `lines_geom` intersect this unioned buffer and returns their indices.
+
+    Parameters:
+        lines_geom (GeoSeries): A GeoSeries containing the line geometries. This could also be the 
+                                geometry column from a GeoDataFrame of lines.
+        points_geom (GeoSeries): A GeoSeries containing the point geometries. This could also be the 
+                                 geometry column from a GeoDataFrame of points.
+        buffer_distance (float): The distance (in the same units as the CRS of the geometries) used to 
+                                 buffer each point.
+
+    Returns:
+        tuple:
+            status (bool): True if one or more line features intersect the union of the point buffers,
+                           False otherwise.
+            nearby_lines_index (numpy.ndarray): A NumPy array containing the indices of the line features
+                                                  from `lines_geom` that intersect with the unioned buffer.
+
+    Example:
+        >>> status, indices = get_nearby(lines.geometry, points.geometry, 100)
+        >>> print(status)  # True if at least one line intersects the buffered area
+        >>> print(indices) # Array of indices of intersecting line features
+
+    Notes:
+        - Ensure that both `lines_geom` and `points_geom` have the same Coordinate Reference System (CRS)
+          to guarantee accurate spatial operations.
+        - The function uses `unary_union` to efficiently combine all point buffers into one geometry.
+    """
+    # Create buffers for each point and then compute the union of all buffers.
+    union_buffer = points_geom.buffer(buffer_distance).unary_union
+
+    # Use the union buffer to find all line features that intersect it.
+    nearby_lines_index = lines_geom[lines_geom.intersects(union_buffer)].index.to_numpy()
+
+    # Determine the status based on whether any intersections were found.
+    status = nearby_lines_index.size > 0
+
+    return status, nearby_lines_index, lines_geom.iloc[nearby_lines_index].get_coordinates().to_numpy().reshape(-1,2,2)
