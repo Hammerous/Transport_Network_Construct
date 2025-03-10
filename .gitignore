@@ -11,3 +11,4 @@ test/*
 *.dbf
 *.qix
 *.pyc
+*.json

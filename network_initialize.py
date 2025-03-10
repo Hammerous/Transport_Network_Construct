@@ -1,4 +1,4 @@
-import threading, time, os
+import threading, time, os, json
 from queue import Queue
 import tools.numpy_cal as npcal
 import tools.coord_sys as crd
@@ -15,9 +15,10 @@ pt_csv_param = ((r'grid_centroids.csv', 'Id', ('X', 'Y'), 'epsg:32651'),
 
 # 2. Lines shapefile, index field name, direction field name (optional, 0 for no / 1 for has)
 # (only accept one file)
-line_shp_path = r'classified_L3.shp'
-line_field_param = ['link_id', 'Direction']    ### if direction field name not provided, then will produce an undirected graph
-# must be list object
+line_shp_path = r'walk_lines.shp'
+line_id_field = 'W_Id'
+line_dir_field = 'Direction'
+### if direction field name not provided, then will produce an undirected graph
 
 # 3. Targeted EPSG serial
 # (Must be a projection coordinate system)
@@ -32,6 +33,40 @@ acc_param = {'buffer_range':1500,       # meter
              'min_block': 2             # optional,一个block下至少有多少个点（至少为1） 
              }
 
+def add_prefix(file_path: str, prefix: str) -> str:
+    """
+    Adds a prefix to the file name while maintaining its directory and extension.
+
+    :param file_path: The original file path.
+    :param prefix: The prefix to add to the file name.
+    :return: The new file path with the prefixed file name.
+    """
+    dir_name, file_name = os.path.split(file_path)
+    name, ext = os.path.splitext(file_name)
+    new_file_path = os.path.join(dir_name, f"{prefix}{name}{ext}")
+    return new_file_path
+
+def initialize_points(pt_csv_param: dict, target_crs: str, result: dict, bandwidth=None, min_block=None):
+    # Initialize the PointsLoader with CSV parameters and chunk size
+    loader = shp.PointLoader(pt_csv_param, target_crs, chunksize=100000)
+    gdf = loader.load_all_csvs()
+    coords_clusters, orphans_clusters, pt_coordinates = ms_acc.point_cluster(bandwidth, min_block, gdf.geometry)
+    result['points'] = gdf
+    result['pt_coordinates'] = pt_coordinates
+    result['coords_clusters'] = coords_clusters
+    result['orphans_clusters'] = orphans_clusters
+
+def initialize_lines(line_shp_path: str, idx_fields: list, target_crs: str, result: dict):
+    lines = shp.LineLoader(line_shp_path, idx_fields, target_crs, shp_max_worker)
+    lines.load_lines()
+    print("Saving Files ... ")
+    lines.gdf.to_file("line_.shp", driver="ESRI Shapefile", encoding='utf-8')
+    # Save dictionary as a JSON file
+    with open("line_nodes.json", "w", encoding="utf-8") as f:
+        json.dump(lines.node_dict, f, ensure_ascii=False, indent=4)  # Pretty-print with indentation
+    result['lines'] = lines.gdf
+    result['count'] = len(lines.node_dict)
+
 if __name__ == "__main__":
     dirpath=os.path.dirname(os.path.abspath(__file__))  # 获取当前路径
     os.chdir(dirpath)  # 切换到当前目录
@@ -40,28 +75,13 @@ if __name__ == "__main__":
     # Define a lock for thread-safe operations on the global variables
     lock = threading.Lock()
     error_flag = threading.Event()
-    active_threads = 0
+    active_threads = 0 
     
-    # result = {}
-    # shp.initialize_points(pt_csv_param, target_crs, result)
-    # gdf = result['points']
-    # print(result['points'].shape)
-    # coords_clusters, orphans_clusters, pt_coordinates = ms_acc.point_cluster(acc_param['bandwidth'], acc_param['min_block'], gdf.geometry)
-    
-    # print(pt_coordinates.shape)
-    # print(len(coords_clusters))
-    # print(len((orphans_clusters)))
+    result = {}
     print("Initializing Files ... ")
-    gdf = shp.LineLoader(line_shp_path, line_field_param, target_crs, shp_max_worker)
-    gdf = gdf.load_lines()
-    print("Saving Files ... ")
-    gdf.to_file("tmp.shp", driver="ESRI Shapefile", encoding='utf-8')
-    exit()
-    
-    print("Initializing Files ... ")
-    thread1 = threading.Thread(target=shp.initialize_points, args=(pt_csv_param, target_crs, result,
-                                                                   acc_param.bandwidth, acc_param.min_block))
-    thread2 = threading.Thread(target=shp.loading_lines, args=(line_shp_path, line_idx, dir_field, result))
+    thread1 = threading.Thread(target=initialize_points, args=(pt_csv_param, target_crs, result,
+                                                                   acc_param['bandwidth'], acc_param['min_block']))
+    thread2 = threading.Thread(target=initialize_lines, args=(line_shp_path, [line_id_field, line_dir_field], target_crs, result))
     thread1.start()
     thread2.start()
 
@@ -70,19 +90,15 @@ if __name__ == "__main__":
 
     # Access the results
     points = result.get('points')
-    pt_encoded = result.get('pt_encoded')
     pt_coordinates = result.get('pt_coordinates')
     coords_clusters = result.get('coords_clusters')
     orphans_clusters = result.get('orphans_clusters')
 
     lines = result.get('lines')
-    array_lines = result.get('array_lines')
-    encoded_line_vectors = result.get('encoded_line_vectors')
-    all_line_length = result.get('all_line_length') 
-    all_line_vecs = result.get('all_line_vecs') 
     count = result.get('count')
 
-    print(f'\n{array_lines.shape[0]} Lines and {count} Nodes Loaded')
+    print(f'{points.shape[0]} Points, {lines.shape[0]} Lines and {count} Nodes Loaded')
+    exit()
     print('Processing Point Serials ...')
     points['min_dist'] = np.inf
     count = 0

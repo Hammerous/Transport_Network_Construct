@@ -89,59 +89,13 @@ class PointLoader:
         
         return combined_gdf
 
-# Define the first function for clustering
-def initialize_points(pt_csv_param, target_crs, result):
-    # Initialize the PointsLoader with CSV parameters and chunk size
-    loader = PointLoader(pt_csv_param, target_crs, chunksize=10000)
-    gdf = loader.load_all_csvs()
-    result['points'] = gdf
-
-def loading_lines(lines, result):
-    node_dict = {}
-    count = 0
-    def get_or_create_encoding(coord):
-        nonlocal count
-        if coord not in node_dict:
-            node_dict[coord] = f'L{count}'
-            count += 1
-        return node_dict[coord]
-
-    encoded_line_vectors = []
-    array_lines = []
-    for line in lines.geometry:
-        for start, end in zip(line.coords[:-1], line.coords[1:]):
-            encoded_line_vectors.append((get_or_create_encoding(start), get_or_create_encoding(end)))
-            array_lines.append((start, end))
-
-    lines = gpd.GeoDataFrame(geometry=[LineString(coords) for coords in array_lines], crs=lines.crs)
-    # 将数据转换为numpy数组
-    array_lines = np.array(array_lines, dtype=np.float64)
-    encoded_line_vectors = np.array(encoded_line_vectors)
-
-    # 根据start和end的坐标大小关系重新排列
-    sorted_indices = np.lexsort((array_lines[:, :, 1], array_lines[:, :, 0]))
-    array_lines = array_lines[np.arange(array_lines.shape[0])[:, None], sorted_indices]
-    encoded_line_vectors = encoded_line_vectors[np.arange(encoded_line_vectors.shape[0])[:, None], sorted_indices]
-
-    ### array_lines已经按照从左下到右上的顺序排列，encoded_line_vectors为对应顺序的线段端点
-    all_line_vecs = array_lines[:, 1, :] - array_lines[:, 0, :]   # 计算线段的向量
-    all_line_length = np.linalg.norm(all_line_vecs, axis=1)
-
-    #返回数据
-    result['lines'] = lines
-    result['array_lines'] = array_lines
-    result['encoded_line_vectors'] = encoded_line_vectors
-    result['all_line_length'] = all_line_length
-    result['all_line_vecs'] = all_line_vecs
-    result['count'] = count
-
 class LineLoader:
     """
     A class to load a shapefile containing LineString and MultiLineString geometries,
     break each into individual line segments using multi-threading, and extend each
     segment with specified attribute fields from the original data.
     """
-    def __init__(self, shp_path, idx_fields, target_crs, max_workers=8):
+    def __init__(self, shp_path, shp_param, target_crs, max_workers=8):
         """
         Initializes the LineLoader instance.
         
@@ -152,16 +106,54 @@ class LineLoader:
             max_workers (int): The maximum number of threads to use for processing.
         """
         # Read the shapefile and load only the specified fields plus geometry.
-        self.gdf = gpd.read_file(shp_path, columns=idx_fields + ['geometry'])
+        self.shp_param = shp_param
+        self.gdf = gpd.read_file(shp_path, columns=shp_param + ['geometry'])
         # Ensure all required fields exist in the GeoDataFrame
-        missing_fields = [field for field in idx_fields if field not in self.gdf.columns]
+        missing_fields = [field for field in shp_param if field not in self.gdf.columns]
         if missing_fields:
             raise ValueError(f"Fields {missing_fields} not found in {shp_path}")
         # If source and target CRS differ, perform coordinate transformation.
         if self.gdf.crs != target_crs:
             self.gdf = self.gdf.to_crs(target_crs)
-        self.idx_fields = idx_fields
         self.max_workers = max_workers
+        self.node_dict = {}
+        self.node_count = 0
+
+    def _encode_node(self, coord, Line_Id):
+        if coord not in self.node_dict:
+            self.node_dict[coord] = f'{Line_Id}_{self.node_count:X}'
+            self.node_count += 1
+        return self.node_dict[coord]
+
+    def _process_linestring(self, linestring, attributes):
+        """
+        Process a single LineString object to extract its segments.
+
+        Parameters:
+            linestring (LineString): A Shapely LineString geometry.
+            attributes (dict): A dictionary of attributes to add to each segment.
+
+        Returns:
+            list: A list of dictionaries, each containing a segment's coordinate list,
+                its geometry, an encoding, and additional attributes.
+        """
+        coords = tuple(linestring.coords)
+        line_Id = attributes[self.shp_param[0]]
+        
+        # Precompute encoded values for all coordinates to avoid redundant calls.
+        encoded_coords = [self._encode_node(coord, line_Id) for coord in coords]
+        
+        # Use a list comprehension with dictionary unpacking to create segments.
+        segments = [
+            {
+                'geometry': LineString((coords[i], coords[i+1])),
+                'coord_list': (coords[i], coords[i+1]),
+                'encoding': (encoded_coords[i],encoded_coords[i+1]),
+                **attributes
+            }
+            for i in range(len(coords) - 1)
+        ]
+        return segments
 
     def _process_row(self, row):
         """
@@ -180,31 +172,23 @@ class LineLoader:
         geom = row.geometry
         
         # Create a dictionary of the specified attribute fields.
-        attributes = {field: getattr(row, field) for field in self.idx_fields}
+        attributes = {field: getattr(row, field) for field in self.shp_param}
         
         if geom is None:
             return segments
         
-        # Process a single LineString
+        # Process a single LineString using the helper function.
         if geom.geom_type == 'LineString':
-            coords = list(geom.coords)
-            for i in range(len(coords) - 1):
-                segment = {'geometry': LineString([coords[i], coords[i+1]])}
-                segment.update(attributes)
-                segments.append(segment)
-        # Process a MultiLineString by iterating over its individual LineStrings
+            segments.extend(self._process_linestring(geom, attributes))
+        # Process a MultiLineString by iterating over its individual LineStrings.
         elif geom.geom_type == 'MultiLineString':
             for line in geom.geoms:
-                coords = list(line.coords)
-                for i in range(len(coords) - 1):
-                    segment = {'geometry': LineString([coords[i], coords[i+1]])}
-                    segment.update(attributes)
-                    segments.append(segment)
+                segments.extend(self._process_linestring(line, attributes))
         return segments
 
     def load_lines(self):
         """
-        Breaks down all line segments in the shapefile using multi-threading and 
+        Breaks down all line segments in the shapefile in a single thread and 
         extends each segment with the specified attribute fields.
         
         Returns:
@@ -212,25 +196,15 @@ class LineLoader:
                           line segment along with the transferred attribute fields.
         """
         all_segments = []
-        # Process each row concurrently using a thread pool.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            results = list(executor.map(self._process_row, self.gdf.itertuples(index=False)))
-        
-        # Flatten the list of lists into a single list of segment dictionaries.
-        for seg_list in results:
-            all_segments.extend(seg_list)
+        # Process each row sequentially
+        for row in self.gdf.itertuples(index=False):
+            segments = self._process_row(row)
+            all_segments.extend(segments)
         
         # Create a new GeoDataFrame from the list of segment dictionaries.
-        segments_gdf = gpd.GeoDataFrame(all_segments, crs=self.gdf.crs)
-        return segments_gdf
-
-# Example usage:
-# Assuming 'input_gdf' is your GeoDataFrame with multi-linestring objects that includes
-# the 'Direction' and 'Bus_Id' fields.
-#
-# loader = LineLoader(input_gdf, max_workers=4)
-# segments_gdf = loader.load_lines()
-# segments_gdf.to_file("line_segments.shp")  # Optionally, save the segments to a shapefile
+        self.gdf = gpd.GeoDataFrame(all_segments, crs=self.gdf.crs)
+        # reverse the sequence of line nodes. Although this dict will no longer be used, 
+        self.node_dict = {v: k for k, v in self.node_dict.items()}
 
 def get_nearby(lines, pt_arr, buffer_distance):
     global array_lines, all_line_vecs

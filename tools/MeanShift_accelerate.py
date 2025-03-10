@@ -6,7 +6,7 @@ def point_cluster(bandwidth, num_in_block, point_coordinates):
     coords_array = np.column_stack((point_coordinates.x.values, point_coordinates.y.values))
     
     if bandwidth and num_in_block:
-        print('\rClustering Point Sequence ({0} in sum)...  '.format(coords_array.shape[0]), end='')
+        print('Clustering Point Sequence ({0} in sum)...  '.format(coords_array.shape[0]))
         # First clustering using non-cluster-all strategy.
         ms = MeanShift(bandwidth=bandwidth,
                             min_bin_freq=num_in_block,
@@ -20,7 +20,7 @@ def point_cluster(bandwidth, num_in_block, point_coordinates):
         
         # If there is an orphan cluster (-1), re-cluster those points with cluster_all=True.
         if -1 in coords_clusters:
-            print('\rClustering Orphan Points ({0} in sum)...  '.format(coords_clusters[-1].shape[0]), end='')
+            print('Clustering Orphan Points ({0} in sum)...  '.format(coords_clusters[-1].shape[0]))
             orphan_indices = coords_clusters[-1]
             orphan_coords = coords_array[orphan_indices]
             ms = MeanShift(bandwidth=bandwidth,
