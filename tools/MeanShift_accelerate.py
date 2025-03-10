@@ -33,7 +33,7 @@ def point_cluster(bandwidth, num_in_block, point_coordinates):
             orphans_clusters = {label: orphan_indices[np.where(orphan_labels == label)[0]]
                                 for label in np.unique(orphan_labels)}
             # Remove the orphan cluster from the main clusters.
-            del coords_clusters[-1]            
+            del coords_clusters[-1]
     else:
         # In case clustering function is disabled,
         # treat all points as orphans.

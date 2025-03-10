@@ -2,7 +2,6 @@ import pandas as pd
 import geopandas as gpd
 from pyproj import CRS
 from shapely.geometry import LineString
-import concurrent.futures
 
 class PointLoader:
     def __init__(self, pt_csv_params, target_crs, chunksize=10000, max_workers=8):
@@ -25,44 +24,48 @@ class PointLoader:
         Process a single CSV file and return a GeoDataFrame.
 
         Steps:
-         - Reads the CSV in chunks, loading only the necessary columns.
-         - Creates a GeoDataFrame from each chunk with geometry built from x and y fields.
-         - Sets the source CRS and transforms to target CRS if conversion is needed.
-         - Renames the index column to a common name 'id'.
-         - Keeps only the 'id' and 'geometry' columns.
+        - Reads the CSV in chunks, loading only the necessary columns.
+        - Accumulates the chunks as plain DataFrames.
+        - Concatenates all chunks and then creates the geometry column using x and y fields.
+        - Sets the source CRS and transforms to the target CRS if needed.
+        - Renames the index column to 'id' and keeps only 'id' and 'geometry' columns.
         
         Parameters:
             file_param: Tuple (csv_file, index_col, (x_field, y_field), src_epsg)
         
         Returns:
-            A concatenated GeoDataFrame for the entire CSV file.
+            A GeoDataFrame for the entire CSV file.
         """
         csv_file, index_col, (x_field, y_field), src_epsg = file_param
         src_crs = CRS(src_epsg)
-        chunks = []
         
-        # Read CSV in chunks loading only the necessary columns.
-        for chunk in pd.read_csv(csv_file, usecols=[index_col, x_field, y_field], chunksize=self.chunksize):
-            # Create geometry using the x and y coordinate fields.
-            gdf_chunk = gpd.GeoDataFrame(
-                chunk,
-                geometry=gpd.points_from_xy(chunk[x_field], chunk[y_field])
+        # Read CSV in chunks as plain DataFrames.
+        df = [
+            chunk for chunk in pd.read_csv(
+                csv_file, usecols=[index_col, x_field, y_field], chunksize=self.chunksize
             )
-            # Set the source coordinate system.
-            gdf_chunk.set_crs(src_epsg, inplace=True)
-            
-            # If source and target CRS differ, perform coordinate transformation.
-            if src_crs != self.target_crs:
-                gdf_chunk = gdf_chunk.to_crs(self.target_crs)
-            
-            # Keep only the index column and geometry column.
-            chunks.append(gdf_chunk[[index_col, 'geometry']])
+        ]
         
-        return pd.concat(chunks, ignore_index=True).rename(columns={index_col: "id"})
+        # Concatenate all chunks into one DataFrame.
+        df = pd.concat(df, ignore_index=True)
+        
+        # Create the geometry column for the entire DataFrame at once.
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df[x_field], df[y_field]))
+        
+        # Set the source CRS.
+        gdf.set_crs(src_epsg, inplace=True)
+        
+        # Transform to the target CRS if needed.
+        if src_crs != self.target_crs:
+            gdf = gdf.to_crs(self.target_crs)
+        
+        # Rename the index column to "id".
+        gdf.rename(columns={index_col: "id"}, inplace=True)
+        return gdf[["id", 'geometry']]  # Keep only the index and geometry columns.
 
     def load_all_csvs(self):
         """
-        Process all CSV files concurrently, verify no duplicate IDs exist across files,
+        Process all CSV files sequentially, verify no duplicate IDs exist across files,
         and concatenate them into a single GeoDataFrame.
 
         Raises:
@@ -72,22 +75,52 @@ class PointLoader:
             A single combined GeoDataFrame containing all processed points.
         """
         gdf_list = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Process each CSV concurrently.
-            futures = [executor.submit(self.process_csv, param) for param in self.pt_csv_params]
-            for future in concurrent.futures.as_completed(futures):
-                gdf_list.append(future.result())
-        
+        # Process each CSV sequentially.
+        for param in self.pt_csv_params:
+            print(f"\r{param[0]} loaded ...             ", end='')
+            gdf_list.append(self.process_csv(param))
+        print()
         # Concatenate all GeoDataFrames.
         combined_gdf = pd.concat(gdf_list, ignore_index=True)
+        combined_gdf["id"] = combined_gdf["id"].astype(str)
         
         # Check for duplicate IDs.
         if combined_gdf["id"].duplicated().any():
             raise ValueError("Duplicate IDs found in the combined GeoDataFrame.")
         else:
-            combined_gdf.set_index("id")
+            combined_gdf = combined_gdf.set_index("id")
         
         return combined_gdf
+
+    # def load_all_csvs(self):
+    #     """
+    #     Process all CSV files concurrently, verify no duplicate IDs exist across files,
+    #     and concatenate them into a single GeoDataFrame.
+
+    #     Raises:
+    #         ValueError: If duplicate IDs are found in the combined GeoDataFrame.
+        
+    #     Returns:
+    #         A single combined GeoDataFrame containing all processed points.
+    #     """
+    #     gdf_list = []
+    #     with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+    #         # Process each CSV concurrently.
+    #         futures = [executor.submit(self.process_csv, param) for param in self.pt_csv_params]
+    #         for future in concurrent.futures.as_completed(futures):
+    #             gdf_list.append(future.result())
+        
+    #     # Concatenate all GeoDataFrames.
+    #     combined_gdf = pd.concat(gdf_list, ignore_index=True)
+    #     combined_gdf["id"] = combined_gdf["id"].astype(str)
+        
+    #     # Check for duplicate IDs.
+    #     if combined_gdf["id"].duplicated().any():
+    #         raise ValueError("Duplicate IDs found in the combined GeoDataFrame.")
+    #     else:
+    #         combined_gdf.set_index("id")
+        
+    #     return combined_gdf
 
 class LineLoader:
     """
