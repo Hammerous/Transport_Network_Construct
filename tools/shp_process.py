@@ -119,9 +119,9 @@ class LineLoader:
         self.node_dict = {}
         self.node_count = 0
 
-    def _encode_node(self, coord, Line_Id):
+    def _encode_node(self, coord):
         if coord not in self.node_dict:
-            self.node_dict[coord] = f'{Line_Id}_{self.node_count:X}'
+            self.node_dict[coord] = f'L{self.node_count:X}'
             self.node_count += 1
         return self.node_dict[coord]
 
@@ -138,17 +138,16 @@ class LineLoader:
                 its geometry, an encoding, and additional attributes.
         """
         coords = tuple(linestring.coords)
-        line_Id = attributes[self.shp_param[0]]
         
         # Precompute encoded values for all coordinates to avoid redundant calls.
-        encoded_coords = [self._encode_node(coord, line_Id) for coord in coords]
+        encoded_coords = [self._encode_node(coord) for coord in coords]
         
         # Use a list comprehension with dictionary unpacking to create segments.
         segments = [
             {
                 'geometry': LineString((coords[i], coords[i+1])),
-                #'coordinates': (coords[i], coords[i+1]),
-                'encoding': (encoded_coords[i],encoded_coords[i+1]),
+                'scr_encode': encoded_coords[i],
+                'end_encode': encoded_coords[i+1],
                 **attributes
             }
             for i in range(len(coords) - 1)
@@ -249,3 +248,115 @@ def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_d
     status = nearby_lines_index.size > 0
 
     return status, nearby_lines_index, lines_geom.iloc[nearby_lines_index].get_coordinates().to_numpy().reshape(-1,2,2)
+
+def arr2gdf(attrs_arr, x_arr, y_arr, col_names: list, input_crs: CRS):
+    """
+    Creates a GeoDataFrame from attribute data and saves both the project points and lines to files.
+    
+    Parameters:
+        attrs_lst (list): List of attribute arrays.
+        idxs_lst (list): List of index arrays corresponding to points and lines.
+        points (DataFrame): DataFrame containing point features.
+        lines (GeoDataFrame): GeoDataFrame containing line features.
+        target_crs (str or dict): The coordinate reference system.
+        prj_filename (str): Filename for the project points shapefile.
+        lines_filename (str): Filename for the lines shapefile.
+    """
+    # Create GeoDataFrame for project points using GeoPandas
+    gdf = gpd.GeoDataFrame(
+        attrs_arr,
+        geometry=gpd.points_from_xy(x_arr, y_arr),
+        columns=col_names,
+        crs=input_crs
+    )
+    return gdf
+
+def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: gpd.GeoDataFrame):
+    # Validate prj_gdf columns
+    required_cols = {"line_id", "pt_id", "prj_length"}
+    if not required_cols.issubset(prj_gdf.columns):
+        raise KeyError(f"prj_gdf must contain columns: {required_cols}")
+   
+    # Validate that line_gdf has the required columns
+    required_cols = {"scr_encode", "end_encode"}
+    if not required_cols.issubset(line_gdf.columns):
+        raise KeyError(f"line_gdf must contain columns: {required_cols}")
+
+    modified_edge_idx = set()
+    new_rows = []
+    # Get the indices of the columns to be modified (assumed 'scr_encode', 'end_encode', 'geometry')
+    scr_encode_idx = line_gdf.columns.get_loc('scr_encode')
+    end_encode_idx = line_gdf.columns.get_loc('end_encode')
+    geometry_idx = line_gdf.columns.get_loc('geometry')
+    
+    # Sort points within each line_id by prj_length
+    prj_gdf = prj_gdf.sort_values(by=['line_id', 'prj_length'])
+
+    # Iterate through each line_id group
+    for line_id, group in prj_gdf.groupby("line_id"):
+        line_row = line_gdf.iloc[line_id]  # Direct row access by index
+        prev_geom, end_geom = tuple(line_row.geometry.coords)
+        base_row = line_row.to_numpy()  # Base row as list of column values
+        prev_node = base_row[scr_encode_idx] 
+        
+        # Pre-calculate the number of new rows to create for this group
+        num_new_rows = group.shape[0] * 3 + 1  # 3 new rows per point + 1 final row
+        # Pre-allocate the space for new rows, duplicating base_row
+        segment_rows = base_row.repeat(num_new_rows, axis=0).reshape(-1, num_new_rows).T
+
+        # Iterate over the points in the group and generate new rows
+        idx = 0  # Index for assigning to pre-allocated segment_rows
+        for _, row in group.iterrows():
+            pt_id = row['pt_id']
+            current_node = f"{line_id}-{pt_id}"
+            current_geom = row.geometry
+
+            # Assign the values to the pre-allocated rows
+            segment_rows[idx, scr_encode_idx] = prev_node
+            segment_rows[idx, end_encode_idx] = current_node
+            segment_rows[idx, geometry_idx] = LineString([prev_geom, current_geom])
+            idx += 1
+
+            segment_rows[idx, scr_encode_idx] = pt_id
+            segment_rows[idx, end_encode_idx] = current_node
+            segment_rows[idx, geometry_idx] = LineString([pt_gdf.loc[pt_id].geometry, current_geom])
+            idx += 1
+
+            segment_rows[idx, scr_encode_idx] = current_node
+            segment_rows[idx, end_encode_idx] = pt_id
+            segment_rows[idx, geometry_idx] = LineString([current_geom, pt_gdf.loc[pt_id].geometry])
+            idx += 1
+            
+            # Update previous node and geometry for the next iteration
+            prev_node = current_node
+            prev_geom = current_geom
+
+        # Add the final row for the last projected point
+        segment_rows[idx, scr_encode_idx] = prev_node
+        segment_rows[idx, geometry_idx] = LineString([prev_geom, end_geom])
+
+        # Add the generated rows to new_rows
+        new_rows.extend(segment_rows)
+
+    # Drop modified rows based on their indices
+    line_gdf.drop(index=modified_edge_idx, inplace=True)
+
+    # Convert the list of rows into a GeoDataFrame
+    new_gdf = gpd.GeoDataFrame(new_rows, columns=line_gdf.columns, geometry='geometry', crs=line_gdf.crs)
+
+    # Append the new rows to the original GeoDataFrame
+    line_gdf = pd.concat([line_gdf, new_gdf], ignore_index=True)
+    line_gdf['length'] = line_gdf.geometry.length
+
+    return line_gdf
+
+if __name__ == '__main__':
+    print("Reading Points ...")
+    prj_gdf = gpd.read_file('prj_pts.shp')
+    pt_gdf = gpd.read_file('points.shp').set_index("id")
+    print("Reading Lines ...")
+    line_gdf = gpd.read_file('lines.shp')
+    print("Creating Edges ...")
+    # Call create_edges to generate edges
+    edges, line_gdf = create_edges(prj_gdf, pt_gdf, line_gdf)
+    line_gdf.to_file("lines_tmp.shp", driver="ESRI Shapefile", encoding='utf-8')

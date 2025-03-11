@@ -12,3 +12,5 @@ test/*
 *.qix
 *.pyc
 *.json
+*.txt
+*.edgelist

@@ -49,6 +49,9 @@ def find_nearest_intersect(point_arr: np.ndarray, line_arr: np.ndarray) -> tuple
     attributes = np.column_stack((proj_lengths, distances, proj_points))
     return min_indices, attributes
 
+def collect_arr(lst: list):
+    return np.concatenate(lst)
+
 # Example usage:
 if __name__ == '__main__':
     # 10 points and 5 line segments for demonstration:
