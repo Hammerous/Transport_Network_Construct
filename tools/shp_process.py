@@ -282,70 +282,54 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     if not required_cols.issubset(line_gdf.columns):
         raise KeyError(f"line_gdf must contain columns: {required_cols}")
 
-    modified_edge_idx = set()
-    new_rows = []
-    # Get the indices of the columns to be modified (assumed 'scr_encode', 'end_encode', 'geometry')
-    scr_encode_idx = line_gdf.columns.get_loc('scr_encode')
-    end_encode_idx = line_gdf.columns.get_loc('end_encode')
-    geometry_idx = line_gdf.columns.get_loc('geometry')
-    
     # Sort points within each line_id by prj_length
     prj_gdf = prj_gdf.sort_values(by=['line_id', 'prj_length'])
 
-    # Iterate through each line_id group
-    for line_id, group in prj_gdf.groupby("line_id"):
-        line_row = line_gdf.iloc[line_id]  # Direct row access by index
-        prev_geom, end_geom = tuple(line_row.geometry.coords)
-        base_row = line_row.to_numpy()  # Base row as list of column values
-        prev_node = base_row[scr_encode_idx] 
-        
-        # Pre-calculate the number of new rows to create for this group
-        num_new_rows = group.shape[0] * 3 + 1  # 3 new rows per point + 1 final row
-        # Pre-allocate the space for new rows, duplicating base_row
-        segment_rows = base_row.repeat(num_new_rows, axis=0).reshape(-1, num_new_rows).T
+    def generate_new_rows(group):
+        line_id = group['line_id'].iloc[0]
+        print(f"\r{line_id}", end='')
+        line_row = line_gdf.loc[line_id]
+        start_node = line_row['scr_encode']
+        end_node = line_row['end_encode']
+        start_geom = line_row.geometry.coords[0]
+        end_geom = line_row.geometry.coords[-1]
+        proj_nodes = [f"{line_id}-{pt_id}" for pt_id in group['pt_id']]
+        proj_geoms = list(group['geometry'])
+        nodes = [start_node] + proj_nodes + [end_node]
+        geoms = [start_geom] + proj_geoms + [end_geom]
+        # Segments along the line
+        scr_encodes_line = nodes[:-1]
+        end_encodes_line = nodes[1:]
+        geometries_line = [LineString([g1, g2]) for g1, g2 in zip(geoms[:-1], geoms[1:])]
+        # Additional segments from points to projections
+        scr_encodes_pts = list(group['pt_id'])
+        end_encodes_pts = proj_nodes
+        geometries_pts = [LineString([pt_gdf.loc[pt_id].geometry, proj_geom]) for pt_id, proj_geom in zip(group['pt_id'], proj_geoms)]
+        # Combine all new segments
+        all_scr_encodes = scr_encodes_line + scr_encodes_pts
+        all_end_encodes = end_encodes_line + end_encodes_pts
+        all_geometries = geometries_line + geometries_pts
+        # Create new rows
+        num_new_rows = len(all_scr_encodes)
+        new_rows = pd.DataFrame([line_row] * num_new_rows, columns=line_gdf.columns)
+        new_rows['scr_encode'] = all_scr_encodes
+        new_rows['end_encode'] = all_end_encodes
+        new_rows['geometry'] = all_geometries
+        return new_rows
 
-        # Iterate over the points in the group and generate new rows
-        idx = 0  # Index for assigning to pre-allocated segment_rows
-        for _, row in group.iterrows():
-            pt_id = row['pt_id']
-            current_node = f"{line_id}-{pt_id}"
-            current_geom = row.geometry
+    # Generate new rows for all groups
+    new_gdf = prj_gdf.groupby('line_id').apply(generate_new_rows).reset_index(drop=True)
 
-            # Assign the values to the pre-allocated rows
-            segment_rows[idx, scr_encode_idx] = prev_node
-            segment_rows[idx, end_encode_idx] = current_node
-            segment_rows[idx, geometry_idx] = LineString([prev_geom, current_geom])
-            idx += 1
+    # Get the line_ids that were modified
+    modified_line_ids = prj_gdf['line_id'].unique()
 
-            segment_rows[idx, scr_encode_idx] = pt_id
-            segment_rows[idx, end_encode_idx] = current_node
-            segment_rows[idx, geometry_idx] = LineString([pt_gdf.loc[pt_id].geometry, current_geom])
-            idx += 1
+    # Drop the original rows that were modified
+    line_gdf = line_gdf.drop(index=modified_line_ids)
 
-            segment_rows[idx, scr_encode_idx] = current_node
-            segment_rows[idx, end_encode_idx] = pt_id
-            segment_rows[idx, geometry_idx] = LineString([current_geom, pt_gdf.loc[pt_id].geometry])
-            idx += 1
-            
-            # Update previous node and geometry for the next iteration
-            prev_node = current_node
-            prev_geom = current_geom
-
-        # Add the final row for the last projected point
-        segment_rows[idx, scr_encode_idx] = prev_node
-        segment_rows[idx, geometry_idx] = LineString([prev_geom, end_geom])
-
-        # Add the generated rows to new_rows
-        new_rows.extend(segment_rows)
-
-    # Drop modified rows based on their indices
-    line_gdf.drop(index=modified_edge_idx, inplace=True)
-
-    # Convert the list of rows into a GeoDataFrame
-    new_gdf = gpd.GeoDataFrame(new_rows, columns=line_gdf.columns, geometry='geometry', crs=line_gdf.crs)
-
-    # Append the new rows to the original GeoDataFrame
+    # Append the new rows
     line_gdf = pd.concat([line_gdf, new_gdf], ignore_index=True)
+
+    # Calculate lengths
     line_gdf['length'] = line_gdf.geometry.length
 
     return line_gdf
@@ -358,5 +342,5 @@ if __name__ == '__main__':
     line_gdf = gpd.read_file('lines.shp')
     print("Creating Edges ...")
     # Call create_edges to generate edges
-    edges, line_gdf = create_edges(prj_gdf, pt_gdf, line_gdf)
+    line_gdf = create_edges(prj_gdf, pt_gdf, line_gdf)
     line_gdf.to_file("lines_tmp.shp", driver="ESRI Shapefile", encoding='utf-8')

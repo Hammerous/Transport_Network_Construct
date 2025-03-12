@@ -136,11 +136,11 @@ if __name__ == "__main__":
     del idxs_lst, attrs_lst
     print("Results Collected !!!")
 
-    print("Building Topology Graph ...")
+    print("Building Topology ...")
     lines = shp.create_edges(prj_gdf, points, lines)
-    print("Converting to edgelist ...")
+    print("Converting to Edgelist ...")
     edges = tuple(map(tuple, lines[['scr_encode', 'end_encode', 'length']].to_numpy()))
-    print("Graph Built !!!")
+    print("Creating Graph ...")
     ntx.create_network_graph(edges, False, "test")
 
     print("Saving Files ...")
@@ -156,7 +156,7 @@ if __name__ == "__main__":
         json.dump(nodes, f, ensure_ascii=False, indent=4)
     points.to_file("points.shp", driver="ESRI Shapefile", encoding='utf-8')
     prj_gdf.to_file("prj_pts.shp", driver="ESRI Shapefile", encoding='utf-8')
-    lines.to_file("lines.shp", driver="ESRI Shapefile", encoding='utf-8', index=True)
+    lines.to_file("lines.shp", driver="ESRI Shapefile", encoding='utf-8')
     print('Files Saved !!!')
 
     print(f"Program ends in {time.time() - start_time:.2f} seconds")
