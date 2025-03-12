@@ -51,6 +51,7 @@ def initialize_points(pt_csv_param: tuple, target_crs: str, bandwidth=None, min_
 def initialize_lines(line_shp_path: str, preserve_fields: list, target_crs: str):
     lines = shp.LineLoader(line_shp_path, preserve_fields, target_crs)
     lines.load_lines()
+    #lines.gdf.to_file("lines_tmp.shp", driver="ESRI Shapefile", encoding='utf-8')
     print("Line File Loaded !!!")
     return {
         'lines': lines.gdf,
@@ -130,18 +131,19 @@ if __name__ == "__main__":
     
     idxs_lst = npcal.collect_arr(idxs_lst)
     attrs_lst = npcal.collect_arr(attrs_lst)
-    prj_gdf = shp.arr2gdf(attrs_lst, attrs_lst[:,2], attrs_lst[:,3], ['prj_length', 'dist', 'X', 'Y'], target_crs)
+    #prj_gdf = shp.arr2gdf(attrs_lst, attrs_lst[:,2], attrs_lst[:,3], ['prj_length', 'dist', 'X', 'Y'], target_crs)
+    prj_gdf = shp.arr2gdf(attrs_lst, attrs_lst[:,1], attrs_lst[:,2], ['prj_length', 'X', 'Y'], target_crs)
     prj_gdf['pt_id'] = points.iloc[idxs_lst[:,0]].index
     prj_gdf['line_id'] = lines.iloc[idxs_lst[:,1]].index
     del idxs_lst, attrs_lst
     print("Results Collected !!!")
 
-    print("Building Topology ...")
+    print("Building Topology into Shapefile ...")
     lines = shp.create_edges(prj_gdf, points, lines)
-    print("Converting to Edgelist ...")
-    edges = tuple(map(tuple, lines[['scr_encode', 'end_encode', 'length']].to_numpy()))
-    print("Creating Graph ...")
-    ntx.create_network_graph(edges, False, "test")
+    # print("Converting to Edgelist ...")
+    # edges = tuple(map(tuple, lines[['scr_encode', 'end_encode', 'length']].to_numpy()))
+    # print("Creating Graph ...")
+    # ntx.create_network_graph(edges, False, "test")
 
     print("Saving Files ...")
     # Only write to file if errors occurred
@@ -154,8 +156,8 @@ if __name__ == "__main__":
     # Save dictionary as a JSON file
     with open("line_nodes.json", "w", encoding="utf-8") as f:
         json.dump(nodes, f, ensure_ascii=False, indent=4)
-    points.to_file("points.shp", driver="ESRI Shapefile", encoding='utf-8')
-    prj_gdf.to_file("prj_pts.shp", driver="ESRI Shapefile", encoding='utf-8')
+    #points.to_file("points.shp", driver="ESRI Shapefile", encoding='utf-8')
+    #prj_gdf.to_file("prj_pts.shp", driver="ESRI Shapefile", encoding='utf-8')
     lines.to_file("lines.shp", driver="ESRI Shapefile", encoding='utf-8')
     print('Files Saved !!!')
 

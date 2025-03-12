@@ -41,12 +41,13 @@ def find_nearest_intersect(point_arr: np.ndarray, line_arr: np.ndarray) -> tuple
     point_indices = np.arange(point_arr.shape[0])
     
     # Retrieve the selected projection lengths, distances, and projection points.
+    #distances = np.sqrt(distances_all[min_indices, point_indices])
     proj_lengths = proj_lengths_all[min_indices, point_indices]
-    distances = np.sqrt(distances_all[min_indices, point_indices])
     proj_points = proj_points_all[min_indices, point_indices]
     
-    # Stack attributes into an (n, 4) array.
-    attributes = np.column_stack((proj_lengths, distances, proj_points))
+    #attributes = np.column_stack((proj_lengths, distances, proj_points))   # Stack attributes into an (n, 4) array.
+    # Stack attributes into an (n, 3) array.
+    attributes = np.column_stack((proj_lengths, proj_points)) 
     return min_indices, attributes
 
 def collect_arr(lst: list):
@@ -57,7 +58,7 @@ if __name__ == '__main__':
     # 10 points and 5 line segments for demonstration:
     points = np.random.rand(10, 2)
     lines = np.random.rand(5, 2, 2)
-    nearest_line_indices, proj_lengths, distances, prj_points = find_nearest_intersect(points, lines)
+    #nearest_line_indices, proj_lengths, distances, prj_points = find_nearest_intersect(points, lines)
+    nearest_line_indices, attributes = find_nearest_intersect(points, lines)
     print("Nearest line indices:", nearest_line_indices)
-    print("Projection lengths:", proj_lengths)
-    print("Distances:", distances)
+    print("Attributes:", attributes)

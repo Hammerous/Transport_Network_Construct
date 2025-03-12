@@ -142,14 +142,10 @@ class LineLoader:
         # Precompute encoded values for all coordinates to avoid redundant calls.
         encoded_coords = [self._encode_node(coord) for coord in coords]
         
-        # Use a list comprehension with dictionary unpacking to create segments.
+        # Use a list comprehension to create segments.
+        ### 'geometry', 'scr_encode', 'end_encode'
         segments = [
-            {
-                'geometry': LineString((coords[i], coords[i+1])),
-                'scr_encode': encoded_coords[i],
-                'end_encode': encoded_coords[i+1],
-                **attributes
-            }
+            (LineString((coords[i], coords[i+1])), encoded_coords[i], encoded_coords[i+1]) + attributes
             for i in range(len(coords) - 1)
         ]
         return segments
@@ -170,8 +166,8 @@ class LineLoader:
         segments = []
         geom = row.geometry
         
-        # Create a dictionary of the specified attribute fields.
-        attributes = {field: getattr(row, field) for field in self.shp_param}
+        # Create a list of the specified attribute fields in the given order.
+        attributes = tuple(getattr(row, field) for field in self.shp_param)
         
         if geom is None:
             return segments
@@ -201,7 +197,8 @@ class LineLoader:
             all_segments.extend(segments)
         
         # Create a new GeoDataFrame from the list of segment dictionaries.
-        self.gdf = gpd.GeoDataFrame(all_segments, crs=self.gdf.crs)
+        self.gdf = gpd.GeoDataFrame(all_segments, crs=self.gdf.crs,\
+                                    columns=['geometry', 'scr_encode', 'end_encode']+self.shp_param)
         # reverse the sequence of line nodes. Although this dict will no longer be used, 
         self.node_dict = {v: k for k, v in self.node_dict.items()}
 
@@ -282,56 +279,69 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     if not required_cols.issubset(line_gdf.columns):
         raise KeyError(f"line_gdf must contain columns: {required_cols}")
 
+    print("Pre-processing Dataframe ...", end='')
     # Sort points within each line_id by prj_length
     prj_gdf = prj_gdf.sort_values(by=['line_id', 'prj_length'])
+    prj_gdf['current_node'] = prj_gdf['line_id'].astype(str) + '-' + prj_gdf['pt_id'].astype(str)
 
-    def generate_new_rows(group):
-        line_id = group['line_id'].iloc[0]
-        print(f"\r{line_id}", end='')
-        line_row = line_gdf.loc[line_id]
-        start_node = line_row['scr_encode']
-        end_node = line_row['end_encode']
-        start_geom = line_row.geometry.coords[0]
-        end_geom = line_row.geometry.coords[-1]
-        proj_nodes = [f"{line_id}-{pt_id}" for pt_id in group['pt_id']]
-        proj_geoms = list(group['geometry'])
-        nodes = [start_node] + proj_nodes + [end_node]
-        geoms = [start_geom] + proj_geoms + [end_geom]
-        # Segments along the line
-        scr_encodes_line = nodes[:-1]
-        end_encodes_line = nodes[1:]
-        geometries_line = [LineString([g1, g2]) for g1, g2 in zip(geoms[:-1], geoms[1:])]
-        # Additional segments from points to projections
-        scr_encodes_pts = list(group['pt_id'])
-        end_encodes_pts = proj_nodes
-        geometries_pts = [LineString([pt_gdf.loc[pt_id].geometry, proj_geom]) for pt_id, proj_geom in zip(group['pt_id'], proj_geoms)]
-        # Combine all new segments
-        all_scr_encodes = scr_encodes_line + scr_encodes_pts
-        all_end_encodes = end_encodes_line + end_encodes_pts
-        all_geometries = geometries_line + geometries_pts
-        # Create new rows
-        num_new_rows = len(all_scr_encodes)
-        new_rows = pd.DataFrame([line_row] * num_new_rows, columns=line_gdf.columns)
-        new_rows['scr_encode'] = all_scr_encodes
-        new_rows['end_encode'] = all_end_encodes
-        new_rows['geometry'] = all_geometries
-        return new_rows
+    pt_gdf.rename(columns={"geometry": "pt_geom"}, inplace=True)
+    prj_gdf.rename(columns={"geometry": "prj_geom"}, inplace=True)
+    cols_rmv = pt_gdf.columns.to_list() + prj_gdf.columns.to_list()
 
-    # Generate new rows for all groups
-    new_gdf = prj_gdf.groupby('line_id').apply(generate_new_rows).reset_index(drop=True)
+    merged = prj_gdf.merge(pt_gdf, left_on='pt_id', right_index=True)
+    merged = merged.merge(line_gdf, left_on='line_id', right_index=True)
 
-    # Get the line_ids that were modified
-    modified_line_ids = prj_gdf['line_id'].unique()
+    print("\rConstructing projected lines ...       ", end='')
+    # Copy the merged gdf
+    connect_gdf = merged.copy()
+    connect_gdf['end_encode'] = connect_gdf['current_node']
+    #print(connect_gdf.iloc[:10][['prj_length', 'pt_id', 'line_id', 'scr_encode', 'end_encode', 'geometry']])
+    connect_gdf['scr_encode'] = connect_gdf['current_node'].shift(1)  # Use shift to assign the previous row's value
+    connect_gdf['prev_prj_geom'] = connect_gdf['prj_geom'].shift(1)
+    # Assign these values to the 'geometry' column for all rows except the first one
+    connect_gdf.loc[connect_gdf.index[1:], 'geometry'] = [
+        LineString([prev, curr])
+        for prev, curr in zip(connect_gdf['prev_prj_geom'].iloc[1:], connect_gdf['prj_geom'].iloc[1:])
+    ]
+    # Keep all rows except the first occurrence of each value in column 'line_id'
+    connect_gdf = connect_gdf[connect_gdf['line_id'].duplicated(keep='first')]
+    connect_gdf.reset_index(drop=True, inplace=True)
+    connect_gdf.drop(columns=cols_rmv + ['prev_prj_geom'], inplace=True)  # Drop columns explicitly as lists
 
+    print("\rConstructing connecting lines ...       ", end='')
+    # Copy the merged gdf
+    to_network_gdf = merged.copy()
+    # Replace scr_encode with pt_id, and end_encode with current_node
+    to_network_gdf['scr_encode'] = to_network_gdf['pt_id']
+    to_network_gdf['end_encode'] = to_network_gdf['current_node']
+    # Create geometry column of LineStrings from pt_geom and prj_geom
+    to_network_gdf['geometry'] = [LineString([pt, prj]) for pt, prj in zip(to_network_gdf['pt_geom'], to_network_gdf['prj_geom'])]
+    # Drop the columns that need to be replaced
+    to_network_gdf.drop(columns=cols_rmv, inplace=True)
+
+    print("\rConstructing start lines ...           ", end='')
+    first_gdf = merged.copy().drop_duplicates(subset='line_id', keep='first')
+    modified_line_ids = first_gdf['line_id'].values  # Get the line_ids that were modified
+    first_gdf['end_encode'] = first_gdf['current_node']
+    first_gdf['geometry'] = [LineString([geom.coords[0], prj]) for geom, prj in zip(first_gdf['geometry'], first_gdf['prj_geom'])]
+    first_gdf.drop(columns=cols_rmv, inplace=True)
+
+    print("\rConstructing end lines ...             ", end='')
+    last_gdf = merged.copy().drop_duplicates(subset='line_id', keep='last')
+    last_gdf['scr_encode'] = last_gdf['current_node']
+    last_gdf['geometry'] = [LineString([prj, geom.coords[1]]) for geom, prj in zip(last_gdf['geometry'], last_gdf['prj_geom'])]
+    last_gdf.drop(columns=cols_rmv, inplace=True)
+
+    print("\rIntegrating ...                        ", end='')
     # Drop the original rows that were modified
     line_gdf = line_gdf.drop(index=modified_line_ids)
-
     # Append the new rows
-    line_gdf = pd.concat([line_gdf, new_gdf], ignore_index=True)
-
+    tmp_df = pd.concat([line_gdf, connect_gdf, to_network_gdf, last_gdf, first_gdf], ignore_index=True)
+    line_gdf = gpd.GeoDataFrame(tmp_df, geometry="geometry", crs=line_gdf.crs)
     # Calculate lengths
     line_gdf['length'] = line_gdf.geometry.length
 
+    print("\rEdges Created !!!                      ", end='\n')
     return line_gdf
 
 if __name__ == '__main__':
@@ -339,8 +349,8 @@ if __name__ == '__main__':
     prj_gdf = gpd.read_file('prj_pts.shp')
     pt_gdf = gpd.read_file('points.shp').set_index("id")
     print("Reading Lines ...")
-    line_gdf = gpd.read_file('lines.shp')
+    line_gdf = gpd.read_file('lines_tmp.shp')
     print("Creating Edges ...")
     # Call create_edges to generate edges
     line_gdf = create_edges(prj_gdf, pt_gdf, line_gdf)
-    line_gdf.to_file("lines_tmp.shp", driver="ESRI Shapefile", encoding='utf-8')
+    line_gdf.to_file("lines_mod.shp", driver="ESRI Shapefile", encoding='utf-8')
