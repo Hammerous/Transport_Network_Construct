@@ -26,10 +26,10 @@ buffer_range = 1500       # meter
 
 # 5. Parameters for multi-thread acceleration
 acc_param = {
-    'blocks max thread': 16,    # threads to process dense points blocks, recommended to reduce if running memory insufficienct
-    'single max thread': 64,   # threads to process sparse points blocks or single points
-    'bandwidth': 2000,          # optional, diameter in meters to create a points block
-    'min_block': 2              # optional, minimun points to create a points block
+    'blocks max thread': 16,    # threads to process dense points blocks, reduce if memory insufficient
+    'single max thread': 64,    # threads to process sparse points blocks or single points, reduce if memory insufficient
+    'bandwidth': 2000,          # optional, diameter in meters to create a points block, reduce if memory insufficient
+    'min_block': 2              # optional, minimun points to create a points block, increase if memory insufficient
 }
 
 def initialize_points(pt_csv_param: tuple, target_crs: str, bandwidth: float = None, min_block: int = None) -> dict:
