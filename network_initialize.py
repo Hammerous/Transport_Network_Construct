@@ -12,11 +12,12 @@ pt_csv_param = [(r'grid_centroids.csv', 'Id', ('X', 'Y'), 'epsg:32651'),
                 (r'bus_stops.csv', 'Bus_Id', ('X', 'Y'), 'epsg:4326'),
                 (r'subway_stops.csv', 'Sub_Id', ('X', 'Y'), 'epsg:32651')]
                 
-# 2. Lines shapefile, preserved fields (list format)
+# 2. Lines shapefile, preserved fields (list format), direction_field (optional)
 # (only accept one file)
 line_shp_path = r'walk_lines.shp'
 #preserve_fields = ['W_Id', 'Direction']
 preserve_fields = ['Direction']
+direction_field = 'Direction'
 
 # 3. Targeted EPSG serial (Must be a projection coordinate system)
 target_crs = "epsg:32651"
@@ -130,7 +131,7 @@ def find_projections(pt_idxs: npcal.np.ndarray, buffer_range: float) -> tuple[np
     pt_geom = points.iloc[pt_idxs].geometry  # Extract geometries of the selected points
     processed_points += pt_idxs.shape[0]
     print(f'\rPoint in process: {processed_points}/{points.shape[0]}               ', end='')
-    ### ⚠⚠⚠ Notice: lines are accessed by abundant threads, thus require memory protection. You could release this lock if memory permits
+    ### ⚠⚠⚠ Notice: lines are accessed by abundant threads, thus require memory protection. You could release this lock if memory permits simutanious accesses
     with lock:
         nearby_lines_index, nearby_lines_arr = shp.nearby_lines(lines.geometry, pt_geom, buffer_range)
 
@@ -204,7 +205,8 @@ if __name__ == "__main__":
         else:
             idxs_lst.append(idx_arr)
             attrs_lst.append(attr_arr)
-    
+    del results_list, processed_points
+
     idxs_lst = npcal.collect_arr(idxs_lst)
     attrs_lst = npcal.collect_arr(attrs_lst)
     prj_gdf = shp.arr2gdf(attrs_lst[:, 0], attrs_lst[:,1], attrs_lst[:,2], ['prj_length'], target_crs)
@@ -215,7 +217,14 @@ if __name__ == "__main__":
     print(f"{timestamp()} Building Topology into Shapefile ...")
     lines = shp.create_edges(prj_gdf, points, lines)
 
+    print(f"{timestamp()} Creating Edgelist...")
+    edges = shp.create_edgelist(lines, direction_field)
+
     print(f"{timestamp()} Saving Files ...")
+
+    with open(fm.add_prefix(line_shp_path, "topo_").split(".")[0]+".edgelist", 'w') as f:
+        f.write(''.join(f"{scr} {end} {length}\n" for scr, end, length in edges))
+    
     # Only write to file if errors occurred
     if error_ids:
         error_log_file = "error_ids.txt"

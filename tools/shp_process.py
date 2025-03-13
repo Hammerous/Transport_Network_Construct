@@ -219,7 +219,20 @@ class LineLoader:
         # reverse the sequence of line nodes. Although this dict will no longer be used, 
         self.node_dict = {v: k for k, v in self.node_dict.items()}
 
-def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float):
+def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float) -> tuple:
+    """
+    Identifies nearby lines based on the proximity of points within a specified buffer distance.
+
+    Parameters:
+    - lines_geom (gpd.GeoSeries): A GeoSeries containing geometries of lines (e.g., LineStrings).
+    - points_geom (gpd.GeoSeries): A GeoSeries containing point geometries (e.g., Points).
+    - buffer_distance (float): The distance (in the same coordinate reference system as the geometries) to buffer each point, creating a search region.
+
+    Returns:
+    - tuple[np.ndarray, np.ndarray]:
+        - np.ndarray: The indices of the lines that intersect the union of all point buffers.
+        - np.ndarray: A 3D numpy array of coordinates (x, y) of the intersecting lines, reshaped to form a 2x2 array for each line segment.
+    """
     # Create buffers for each point and then compute the union of all buffers.
     union_buffer = points_geom.buffer(buffer_distance).unary_union
     # Use the union buffer to find all line features that intersect it.
@@ -333,13 +346,51 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     print("\rEdges Created !!!                      ", end='\n')
     return line_gdf
 
+def create_edgelist(lines_attr, direction_field=None):
+    """
+    Convert a DataFrame of edges into a tuple of tuples using pandas functions.
+    
+    Parameters:
+    - lines (pd.DataFrame): DataFrame with columns 'scr_encode', 'end_encode', 'length',
+                            and optionally 'Direction'.
+    
+    Returns:
+    - tuple: Tuple of tuples, each representing an edge as (source, target, weight).
+    """    
+    # Validate that line_gdf has the required columns
+    required_cols = {"scr_encode", "end_encode", "length"}
+    if not required_cols.issubset(lines_attr.columns):
+        raise KeyError(f"lines must contain columns: {required_cols}")
+
+    # Check if 'Direction' column exists
+    if direction_field and direction_field in lines_attr.columns:
+        # Filter non-directional edges (Direction == 0)
+        non_directional = lines_attr[lines_attr['Direction'] == 0]
+        # Filter directional edges (Direction == 1)
+        directional = lines_attr[lines_attr['Direction'] == 1]
+        
+        # Create swapped edges for non-directional rows
+        swapped = non_directional[['end_encode', 'scr_encode', 'length']].rename(
+            columns={'end_encode': 'scr_encode', 'scr_encode': 'end_encode'}
+        )
+        
+        # Combine all edges: original non-directional, swapped, and directional
+        lines_attr = pd.concat([non_directional, swapped, directional], ignore_index=True)    
+    
+    # Convert to tuple of tuples
+    edges = tuple(lines_attr[['scr_encode', 'end_encode', 'length']].itertuples(index=False, name=None))
+    
+    return edges
+
 if __name__ == '__main__':
-    print("Reading Points ...")
-    prj_gdf = gpd.read_file('prj_pts.shp')
-    pt_gdf = gpd.read_file('points.shp').set_index("id")
+    # print("Reading Points ...")
+    # prj_gdf = gpd.read_file('prj_pts.shp')
+    # pt_gdf = gpd.read_file('points.shp').set_index("id")
     print("Reading Lines ...")
-    line_gdf = gpd.read_file('lines_tmp.shp')
-    print("Creating Edges ...")
-    # Call create_edges to generate edges
-    line_gdf = create_edges(prj_gdf, pt_gdf, line_gdf)
-    line_gdf.to_file("lines_mod.shp", driver="ESRI Shapefile", encoding='utf-8')
+    line_gdf = gpd.read_file('topo_walk_lines.shp')
+    # print("Creating Edges ...")
+    # # Call create_edges to generate edges
+    # line_gdf = create_edges(prj_gdf, pt_gdf, line_gdf)
+    # line_gdf.to_file("lines_mod.shp", driver="ESRI Shapefile", encoding='utf-8')
+    edges = create_edgelist(line_gdf[['scr_encode', 'end_encode', 'length','Direction']], 'Direction')
+    print(edges[:10])
