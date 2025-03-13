@@ -50,7 +50,16 @@ def find_nearest_intersect(point_arr: np.ndarray, line_arr: np.ndarray) -> tuple
     attributes = np.column_stack((proj_lengths, proj_points)) 
     return min_indices, attributes
 
-def collect_arr(lst: list):
+def collect_arr(lst: np.ndarray) -> np.ndarray:
+    """
+    Concatenates a list of numpy arrays into a single numpy array.
+
+    Parameters:
+    - lst: A list of numpy arrays to be concatenated.
+
+    Returns:
+    - A single numpy array obtained by concatenating the input arrays.
+    """
     return np.concatenate(lst)
 
 # Example usage:

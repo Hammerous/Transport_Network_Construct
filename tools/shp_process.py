@@ -1,7 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 from pyproj import CRS
-from shapely.geometry import LineString
+from shapely.geometry import LineString, MultiLineString
 
 class PointLoader:
     def __init__(self, pt_csv_params, target_crs, chunksize=10000):
@@ -119,19 +119,33 @@ class LineLoader:
         self.node_dict = {}
         self.node_count = 0
 
-    def _encode_node(self, coord):
+    def _encode_node(self, coord: tuple[float, float]) -> str:
+        """
+        Encodes a coordinate (tuple of floats) as a unique node identifier.
+        
+        If the coordinate has not been previously encoded, it is assigned a new 
+        identifier in the format 'L' followed by a hexadecimal representation 
+        of the current node count. The node count is incremented with each new
+        unique coordinate.
+
+        Parameters:
+        - coord: A tuple representing the coordinate (x, y) of the node.
+
+        Returns:
+        - A unique string identifier for the node.
+        """
         if coord not in self.node_dict:
             self.node_dict[coord] = f'L{self.node_count:X}'
             self.node_count += 1
         return self.node_dict[coord]
 
-    def _process_linestring(self, linestring, attributes):
+    def _process_linestring(self, linestring: LineString, attributes: tuple) -> list:
         """
         Process a single LineString object to extract its segments.
 
         Parameters:
             linestring (LineString): A Shapely LineString geometry.
-            attributes (dict): A dictionary of attributes to add to each segment.
+            attributes (tuple): A tuple of attributes to add to each segment.
 
         Returns:
             list: A list of dictionaries, each containing a segment's coordinate list,
@@ -150,36 +164,39 @@ class LineLoader:
         ]
         return segments
 
-    def _process_row(self, row):
-        """
-        Process a single row to extract individual line segments while copying 
-        the specified attributes.
-        
-        Parameters:
-            row (namedtuple): A row from the GeoDataFrame with a 'geometry' attribute and
-                              additional fields specified in idx_fields.
-        
-        Returns:
-            list: A list of dictionaries. Each dictionary contains a segment geometry
-                  and the specified attribute fields.
-        """
-        segments = []
-        geom = row.geometry
-        
-        # Create a list of the specified attribute fields in the given order.
-        attributes = tuple(getattr(row, field) for field in self.shp_param)
-        
-        if geom is None:
+    def _process_row(self, row: gpd.GeoSeries) -> list:
+            """
+            Processes a row from a GeoDataFrame and returns a list of segments based on the geometry type.
+            
+            This function processes a single row from a GeoDataFrame. It first extracts the geometry and a list of
+            specified attributes. Then it processes the geometry:
+            - For a LineString, it calls the `_process_linestring` helper function.
+            - For a MultiLineString, it iterates through the individual LineStrings and processes each one.
+            
+            Parameters:
+            - row: A GeoSeries representing a single row in the GeoDataFrame containing geometry and attributes.
+
+            Returns:
+            - A list of segments obtained by processing the geometry in the row.
+            """
+            segments = []
+            geom = row.geometry
+            
+            # Create a list of the specified attribute fields in the given order.
+            attributes = tuple(getattr(row, field) for field in self.shp_param)
+            
+            if geom is None:
+                return segments
+            
+            # Process a single LineString using the helper function.
+            if isinstance(geom, LineString):
+                segments.extend(self._process_linestring(geom, attributes))
+            # Process a MultiLineString by iterating over its individual LineStrings.
+            elif isinstance(geom, MultiLineString):
+                for line in geom.geoms:
+                    segments.extend(self._process_linestring(line, attributes))
+            
             return segments
-        
-        # Process a single LineString using the helper function.
-        if geom.geom_type == 'LineString':
-            segments.extend(self._process_linestring(geom, attributes))
-        # Process a MultiLineString by iterating over its individual LineStrings.
-        elif geom.geom_type == 'MultiLineString':
-            for line in geom.geoms:
-                segments.extend(self._process_linestring(line, attributes))
-        return segments
 
     def load_lines(self):
         """
@@ -198,53 +215,16 @@ class LineLoader:
         
         # Create a new GeoDataFrame from the list of segment dictionaries.
         self.gdf = gpd.GeoDataFrame(all_segments, crs=self.gdf.crs,\
-                                    columns=['geometry', 'scr_encode', 'end_encode']+self.shp_param)
+                                    columns=['geometry','scr_encode','end_encode']+self.shp_param)
         # reverse the sequence of line nodes. Although this dict will no longer be used, 
         self.node_dict = {v: k for k, v in self.node_dict.items()}
 
 def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float):
-    """
-    Determines which line geometries intersect the union of buffered point geometries.
-
-    This function creates a buffer around each point in the provided `points_geom` using the specified
-    `buffer_distance`. It then computes the union of all these buffers to form a single geometry. Finally,
-    it checks which line features in `lines_geom` intersect this unioned buffer and returns their indices.
-
-    Parameters:
-        lines_geom (GeoSeries): A GeoSeries containing the line geometries. This could also be the 
-                                geometry column from a GeoDataFrame of lines.
-        points_geom (GeoSeries): A GeoSeries containing the point geometries. This could also be the 
-                                 geometry column from a GeoDataFrame of points.
-        buffer_distance (float): The distance (in the same units as the CRS of the geometries) used to 
-                                 buffer each point.
-
-    Returns:
-        tuple:
-            status (bool): True if one or more line features intersect the union of the point buffers,
-                           False otherwise.
-            nearby_lines_index (numpy.ndarray): A NumPy array containing the indices of the line features
-                                                  from `lines_geom` that intersect with the unioned buffer.
-
-    Example:
-        >>> status, indices = get_nearby(lines.geometry, points.geometry, 100)
-        >>> print(status)  # True if at least one line intersects the buffered area
-        >>> print(indices) # Array of indices of intersecting line features
-
-    Notes:
-        - Ensure that both `lines_geom` and `points_geom` have the same Coordinate Reference System (CRS)
-          to guarantee accurate spatial operations.
-        - The function uses `unary_union` to efficiently combine all point buffers into one geometry.
-    """
     # Create buffers for each point and then compute the union of all buffers.
     union_buffer = points_geom.buffer(buffer_distance).unary_union
-
     # Use the union buffer to find all line features that intersect it.
     nearby_lines_index = lines_geom[lines_geom.intersects(union_buffer)].index.to_numpy()
-
-    # Determine the status based on whether any intersections were found.
-    status = nearby_lines_index.size > 0
-
-    return status, nearby_lines_index, lines_geom.iloc[nearby_lines_index].get_coordinates().to_numpy().reshape(-1,2,2)
+    return nearby_lines_index, lines_geom.iloc[nearby_lines_index].get_coordinates().to_numpy().reshape(-1,2,2)
 
 def arr2gdf(attrs_arr, x_arr, y_arr, col_names: list, input_crs: CRS):
     """
@@ -268,7 +248,25 @@ def arr2gdf(attrs_arr, x_arr, y_arr, col_names: list, input_crs: CRS):
     )
     return gdf
 
-def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: gpd.GeoDataFrame):
+def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Creates edges by processing and merging project, point, and line GeoDataFrames to form network connections.
+
+    This function performs the following tasks:
+    - Validates required columns in input GeoDataFrames.
+    - Sorts and processes project GeoDataFrame to create connection edges.
+    - Creates connecting lines for the network.
+    - Handles the creation of start and end lines for each project.
+    - Merges all processed data into a final network GeoDataFrame.
+
+    Parameters:
+    - prj_gdf: A GeoDataFrame containing project-related data with columns 'line_id', 'pt_id', and 'prj_length'.
+    - pt_gdf: A GeoDataFrame containing point-related data with geometry.
+    - line_gdf: A GeoDataFrame containing line-related data, must have 'scr_encode' and 'end_encode' columns.
+
+    Returns:
+    - A GeoDataFrame representing the created edges (lines) with calculated lengths.
+    """
     # Validate prj_gdf columns
     required_cols = {"line_id", "pt_id", "prj_length"}
     if not required_cols.issubset(prj_gdf.columns):
@@ -292,52 +290,43 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     merged = merged.merge(line_gdf, left_on='line_id', right_index=True)
 
     print("\rConstructing projected lines ...       ", end='')
-    # Copy the merged gdf
-    connect_gdf = merged.copy()
-    connect_gdf['end_encode'] = connect_gdf['current_node']
-    #print(connect_gdf.iloc[:10][['prj_length', 'pt_id', 'line_id', 'scr_encode', 'end_encode', 'geometry']])
-    connect_gdf['scr_encode'] = connect_gdf['current_node'].shift(1)  # Use shift to assign the previous row's value
-    connect_gdf['prev_prj_geom'] = connect_gdf['prj_geom'].shift(1)
-    # Assign these values to the 'geometry' column for all rows except the first one
-    connect_gdf.loc[connect_gdf.index[1:], 'geometry'] = [
-        LineString([prev, curr])
-        for prev, curr in zip(connect_gdf['prev_prj_geom'].iloc[1:], connect_gdf['prj_geom'].iloc[1:])
+    prj_lines_gdf = merged.copy()
+    prj_lines_gdf['end_encode'] = prj_lines_gdf['current_node']
+    prj_lines_gdf['scr_encode'] = prj_lines_gdf['current_node'].shift(1)
+    prj_lines_gdf['prev_prj_geom'] = prj_lines_gdf['prj_geom'].shift(1)
+    prj_lines_gdf.loc[prj_lines_gdf.index[1:], 'geometry'] = [
+        LineString([prev, curr]) for prev, curr in prj_lines_gdf[['prev_prj_geom', 'prj_geom']].values[1:]
     ]
-    # Keep all rows except the first occurrence of each value in column 'line_id'
-    connect_gdf = connect_gdf[connect_gdf['line_id'].duplicated(keep='first')]
-    connect_gdf.reset_index(drop=True, inplace=True)
-    connect_gdf.drop(columns=cols_rmv + ['prev_prj_geom'], inplace=True)  # Drop columns explicitly as lists
+    prj_lines_gdf = prj_lines_gdf[prj_lines_gdf['line_id'].duplicated(keep='first')]
+    prj_lines_gdf.reset_index(drop=True, inplace=True)
+    prj_lines_gdf.drop(columns=cols_rmv + ['prev_prj_geom'], inplace=True)
 
     print("\rConstructing connecting lines ...       ", end='')
-    # Copy the merged gdf
     to_network_gdf = merged.copy()
-    # Replace scr_encode with pt_id, and end_encode with current_node
     to_network_gdf['scr_encode'] = to_network_gdf['pt_id']
     to_network_gdf['end_encode'] = to_network_gdf['current_node']
-    # Create geometry column of LineStrings from pt_geom and prj_geom
-    to_network_gdf['geometry'] = [LineString([pt, prj]) for pt, prj in zip(to_network_gdf['pt_geom'], to_network_gdf['prj_geom'])]
-    # Drop the columns that need to be replaced
+    to_network_gdf['geometry'] = [LineString([pt, prj]) for pt, prj in to_network_gdf[['pt_geom', 'prj_geom']].values]
     to_network_gdf.drop(columns=cols_rmv, inplace=True)
 
     print("\rConstructing start lines ...           ", end='')
     first_gdf = merged.copy().drop_duplicates(subset='line_id', keep='first')
-    modified_line_ids = first_gdf['line_id'].values  # Get the line_ids that were modified
+    modified_line_ids = first_gdf['line_id'].values
     first_gdf['end_encode'] = first_gdf['current_node']
-    first_gdf['geometry'] = [LineString([geom.coords[0], prj]) for geom, prj in zip(first_gdf['geometry'], first_gdf['prj_geom'])]
+    first_gdf['geometry'] = [LineString([geom.coords[0], prj]) for geom, prj in first_gdf[['geometry', 'prj_geom']].values]
     first_gdf.drop(columns=cols_rmv, inplace=True)
 
     print("\rConstructing end lines ...             ", end='')
     last_gdf = merged.copy().drop_duplicates(subset='line_id', keep='last')
     last_gdf['scr_encode'] = last_gdf['current_node']
-    last_gdf['geometry'] = [LineString([prj, geom.coords[1]]) for geom, prj in zip(last_gdf['geometry'], last_gdf['prj_geom'])]
+    last_gdf['geometry'] = [LineString([prj, geom.coords[1]]) for geom, prj in last_gdf[['geometry', 'prj_geom']].values]
     last_gdf.drop(columns=cols_rmv, inplace=True)
 
-    print("\rIntegrating ...                        ", end='')
+    print("\rIntegrating lines ...                   ", end='')
     # Drop the original rows that were modified
     line_gdf = line_gdf.drop(index=modified_line_ids)
-    # Append the new rows
-    tmp_df = pd.concat([line_gdf, connect_gdf, to_network_gdf, last_gdf, first_gdf], ignore_index=True)
-    line_gdf = gpd.GeoDataFrame(tmp_df, geometry="geometry", crs=line_gdf.crs)
+    merged = pd.concat([line_gdf, prj_lines_gdf, to_network_gdf, first_gdf, last_gdf], ignore_index=True)
+    line_gdf = gpd.GeoDataFrame(merged, geometry="geometry", crs=line_gdf.crs)
+
     # Calculate lengths
     line_gdf['length'] = line_gdf.geometry.length
 
