@@ -91,9 +91,15 @@ def initialize_lines(line_shp_path: str, preserve_fields: list, target_crs: str)
 
     print("Line File Loaded !!!")
 
+    # lines.gdf.to_file(fm.add_affix(line_shp_path, "_tmp"), driver="ESRI Shapefile", encoding='utf-8')
+    # Save nodes dictionary as a JSON file
+    # with open("line_nodes.json", "w", encoding="utf-8") as f:
+    #     json.dump(lines.node_dict, f, ensure_ascii=False, indent=4)
+
     return {
         'lines': lines.gdf,  # GeoDataFrame containing line geometries
-        'nodes': lines.node_dict  # Dictionary of extracted nodes
+        #'nodes': lines.node_dict  # Dictionary of extracted nodes
+        'node_cnt': len(lines.node_dict)
     }
 
 def find_projections(pt_idxs: npcal.np.ndarray, buffer_range: float) -> tuple[npcal.np.ndarray, npcal.np.ndarray]:
@@ -159,8 +165,8 @@ if __name__ == "__main__":
             coords_clusters = future_points.result().get('coords_clusters')
             orphans_clusters = future_points.result().get('orphans_clusters')
             lines = future_lines.result().get('lines')
-            nodes = future_lines.result().get('nodes')
-            print(f"{timestamp()} {points.shape[0]} Points, {lines.shape[0]} Lines and {len(nodes)} Nodes Loaded")
+            node_cnt = future_lines.result().get('node_cnt')
+            print(f"{timestamp()} {points.shape[0]} Points, {lines.shape[0]} Lines and {node_cnt} Nodes Loaded")
             del future_points, future_lines
         except Exception as e:
             print(f"{timestamp()} An error occurred: {e}")
@@ -216,12 +222,9 @@ if __name__ == "__main__":
         with open(error_log_file, "w") as file:
             file.write("\n".join(error_ids))
         print(f"{timestamp()} Error IDs saved to {error_log_file}")
-    
-    # Save dictionary as a JSON file
-    with open("line_nodes.json", "w", encoding="utf-8") as f:
-        json.dump(nodes, f, ensure_ascii=False, indent=4)
-    points.to_file(fm.add_affix(line_shp_path, "pts"), driver="ESRI Shapefile", encoding='utf-8')
-    prj_gdf.to_file(fm.add_affix(line_shp_path, "prjs"), driver="ESRI Shapefile", encoding='utf-8')
-    lines.to_file(fm.add_prefix(line_shp_path, "topo"), driver="ESRI Shapefile", encoding='utf-8')
+
+    points.to_file(fm.add_affix(line_shp_path, "_pts"), driver="ESRI Shapefile", encoding='utf-8')
+    prj_gdf.to_file(fm.add_affix(line_shp_path, "_prjs"), driver="ESRI Shapefile", encoding='utf-8')
+    lines.to_file(fm.add_prefix(line_shp_path, "topo_"), driver="ESRI Shapefile", encoding='utf-8')
 
     print(f"{timestamp()} Program ends in {time.time() - start_time:.2f} seconds, go check files in this script's folder")
