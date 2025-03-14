@@ -1,5 +1,37 @@
 import numpy as np
 
+def compute_proj_length(point_arr: np.ndarray, line_arr: np.ndarray):
+    """
+    Compute the projection length (t parameter) for each point onto its corresponding line,
+    and compute the projected point coordinates on the line.
+
+    Parameters:
+    - point_arr: (n, 2) array of point coordinates.
+    - line_arr: (n, 2, 2) array of line segment endpoints.
+
+    Returns:
+    - proj_lengths: (n,) array of projection lengths along the respective lines.
+    - proj_points: (n, 2) array of the projected point coordinates on the lines.
+    """
+    # Extract start and end points of each line
+    line_start = line_arr[:, 0, :]  # shape: (n, 2)
+    line_end = line_arr[:, 1, :]    # shape: (n, 2)
+
+    # Compute direction vectors for each line segment
+    line_vecs = line_end - line_start  # shape: (n, 2)
+    
+    # Compute vector from each line's start to the corresponding point
+    diff = point_arr - line_start  # shape: (n, 2)
+    
+    # Compute projection lengths (t parameters) for each point onto its respective line
+    proj_lengths = np.einsum('ij,ij->i', diff, line_vecs) / np.einsum('ij,ij->i', line_vecs, line_vecs)
+    proj_lengths = np.clip(proj_lengths, 0, 1)  # Ensure projection remains within segment bounds
+
+    # Compute the projected point coordinates on the lines
+    proj_points = line_start + proj_lengths[:, np.newaxis] * line_vecs
+
+    return proj_lengths, proj_points
+
 def find_nearest_intersect(point_arr: np.ndarray, line_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     For each point in `point_arr`, compute its orthogonal projection onto every line segment in `line_arr`

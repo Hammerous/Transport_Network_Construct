@@ -1,7 +1,8 @@
 import pandas as pd
 import geopandas as gpd
 from pyproj import CRS
-from shapely.geometry import LineString, MultiLineString
+from shapely.geometry import LineString, MultiLineString, Point
+from shapely.strtree import STRtree
 
 class PointLoader:
     def __init__(self, pt_csv_params, target_crs, chunksize=10000):
@@ -217,10 +218,11 @@ class LineLoader:
         # Create a new GeoDataFrame from the list of segment dictionaries.
         self.gdf = gpd.GeoDataFrame(all_segments, crs=self.gdf.crs,\
                                     columns=['geometry','scr_encode','end_encode']+self.shp_param)
-        # reverse the sequence of line nodes. Although this dict will no longer be used, 
-        self.node_dict = {v: k for k, v in self.node_dict.items()}
+        # reverse the sequence of line nodes.
+        self.node_dict = gpd.GeoDataFrame(((v, Point(k)) for k, v in self.node_dict.items()), crs=self.gdf.crs,\
+                                    columns=['Id','geometry'])
 
-def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float) -> tuple:
+def _nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float) -> tuple:
     """
     Identifies nearby lines based on the proximity of points within a specified buffer distance.
 
@@ -239,6 +241,53 @@ def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_d
     # Use the union buffer to find all line features that intersect it.
     nearby_lines_index = lines_geom[lines_geom.intersects(union_buffer)].index.to_numpy()
     return nearby_lines_index, lines_geom.iloc[nearby_lines_index].get_coordinates().to_numpy().reshape(-1,2,2)
+
+def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float) -> tuple:
+    """
+    Find the nearest line segments to each point within a given buffer distance.
+    
+    This function uses an R-tree spatial index to efficiently find the nearest 
+    line segment for each point within the specified distance.
+    
+    Parameters:
+    - lines_geom (gpd.GeoSeries): A GeoSeries containing line geometries.
+    - points_geom (gpd.GeoSeries): A GeoSeries containing point geometries.
+    - buffer_distance (float): The maximum search radius to find nearby lines.
+    
+    Returns:
+    - tuple[np.ndarray, np.ndarray]: A tuple containing:
+        - pt_idx (np.ndarray): Indices of points in `points_geom` that have a nearby line.
+        - line_idx (np.ndarray): Corresponding indices of nearest lines in `lines_geom`.
+
+    Notes:
+    - This function constructs an R-tree spatial index using the line geometries.
+    - The `query_nearest` method efficiently finds the closest line for each point.
+    - The `all_matches=False` option ensures that only the closest match is returned for each point.
+    - If multiple points are associated with the same line, they will share the same index in `line_idx`.
+    - The function does not compute exact distances, only retrieves indices of nearby matches.
+    """
+
+    # Build an R-tree spatial index for fast nearest-neighbor lookup
+    rtree = STRtree(lines_geom)
+    
+    # Query the nearest line for each point within the given buffer distance
+    pt_idx, line_idx = rtree.query_nearest(
+        points_geom, 
+        max_distance=buffer_distance, 
+        all_matches=False, 
+        return_distance=False
+    )
+
+    """
+    Output:
+    - `pt_idx` and `line_idx` are NumPy arrays of shape (n,), where:
+      - `pt_idx[i]` is the index of a point in `points_geom`.
+      - `line_idx[i]` is the index of the nearest line in `lines_geom` for that point.
+    - If `return_distance=True` were used, an additional ndarray of distances (n,) would be returned.
+    - If `all_matches=True`, multiple nearest lines per point could be returned.
+    """
+    
+    return pt_idx, line_idx
 
 def arr2gdf(attrs_arr, x_arr, y_arr, col_names: list, input_crs: CRS):
     """
@@ -282,7 +331,7 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     - A GeoDataFrame representing the created edges (lines) with calculated lengths.
     """
     # Validate prj_gdf columns
-    required_cols = {"line_id", "pt_id", "prj_length"}
+    required_cols = {"line_id", "pt_id", "prj_length", "this_node"}
     if not required_cols.issubset(prj_gdf.columns):
         raise KeyError(f"prj_gdf must contain columns: {required_cols}")
    
@@ -294,7 +343,6 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     print("Pre-processing Dataframe ...", end='')
     # Sort points within each line_id by prj_length
     prj_gdf = prj_gdf.sort_values(by=['line_id', 'prj_length'])
-    prj_gdf['current_node'] = net_prefix + prj_gdf['line_id'].astype(str) + '-' + prj_gdf['pt_id'].astype(str)
 
     pt_gdf.rename(columns={"geometry": "pt_geom"}, inplace=True)
     prj_gdf.rename(columns={"geometry": "prj_geom"}, inplace=True)
@@ -305,8 +353,8 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
 
     print("\rConstructing projected lines ...       ", end='')
     prj_lines_gdf = merged.copy()
-    prj_lines_gdf['end_encode'] = prj_lines_gdf['current_node']
-    prj_lines_gdf['scr_encode'] = prj_lines_gdf['current_node'].shift(1)
+    prj_lines_gdf['end_encode'] = prj_lines_gdf['this_node']
+    prj_lines_gdf['scr_encode'] = prj_lines_gdf['this_node'].shift(1)
     prj_lines_gdf['prev_prj_geom'] = prj_lines_gdf['prj_geom'].shift(1)
     prj_lines_gdf.loc[prj_lines_gdf.index[1:], 'geometry'] = [
         LineString([prev, curr]) for prev, curr in prj_lines_gdf[['prev_prj_geom', 'prj_geom']].values[1:]
@@ -318,26 +366,26 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     print("\rConstructing connecting lines ...       ", end='')
     to_network_gdf = merged.copy()
     to_network_gdf['scr_encode'] = to_network_gdf['pt_id']
-    to_network_gdf['end_encode'] = to_network_gdf['current_node']
+    to_network_gdf['end_encode'] = to_network_gdf['this_node']
     to_network_gdf['geometry'] = [LineString([pt, prj]) for pt, prj in to_network_gdf[['pt_geom', 'prj_geom']].values]
     to_network_gdf.drop(columns=cols_rmv, inplace=True)
 
     print("\rConstructing start lines ...           ", end='')
     first_gdf = merged.copy().drop_duplicates(subset='line_id', keep='first')
     modified_line_ids = first_gdf['line_id'].values
-    first_gdf['end_encode'] = first_gdf['current_node']
+    first_gdf['end_encode'] = first_gdf['this_node']
     first_gdf['geometry'] = [LineString([geom.coords[0], prj]) for geom, prj in first_gdf[['geometry', 'prj_geom']].values]
     first_gdf.drop(columns=cols_rmv, inplace=True)
 
     print("\rConstructing end lines ...             ", end='')
     last_gdf = merged.copy().drop_duplicates(subset='line_id', keep='last')
-    last_gdf['scr_encode'] = last_gdf['current_node']
+    last_gdf['scr_encode'] = last_gdf['this_node']
     last_gdf['geometry'] = [LineString([prj, geom.coords[1]]) for geom, prj in last_gdf[['geometry', 'prj_geom']].values]
     last_gdf.drop(columns=cols_rmv, inplace=True)
 
     print("\rIntegrating lines ...                   ", end='')
     # Drop the original rows that were modified
-    line_gdf = line_gdf.drop(index=modified_line_ids)
+    line_gdf.drop(index=modified_line_ids, inplace=True)
     merged = pd.concat([line_gdf, prj_lines_gdf, to_network_gdf, first_gdf, last_gdf], ignore_index=True)
     line_gdf = gpd.GeoDataFrame(merged, geometry="geometry", crs=line_gdf.crs)
 
@@ -386,9 +434,10 @@ def create_edgelist(lines_attr, direction_field=None):
 if __name__ == '__main__':
     # print("Reading Points ...")
     # prj_gdf = gpd.read_file('prj_pts.shp')
-    # pt_gdf = gpd.read_file('points.shp').set_index("id")
+    pt_gdf = gpd.read_file('walk_lines_pts.shp').set_index("id")
     print("Reading Lines ...")
-    line_gdf = gpd.read_file('topo_walk_lines.shp')
+    line_gdf = gpd.read_file('walk_lines.shp')
+    nearby_lines(line_gdf.geometry, pt_gdf.geometry, 1000)
     # print("Creating Edges ...")
     # # Call create_edges to generate edges
     # line_gdf = create_edges(prj_gdf, pt_gdf, line_gdf)
