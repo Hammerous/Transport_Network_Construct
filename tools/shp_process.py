@@ -96,7 +96,7 @@ class LineLoader:
     break each into individual line segments using multi-threading, and extend each
     segment with specified attribute fields from the original data.
     """
-    def __init__(self, shp_path, shp_param, target_crs):
+    def __init__(self, shp_path, shp_param, target_crs, prefix):
         """
         Initializes the LineLoader instance.
         
@@ -108,6 +108,7 @@ class LineLoader:
         """
         # Read the shapefile and load only the specified fields plus geometry.
         self.shp_param = shp_param
+        self.prefix = prefix
         self.gdf = gpd.read_file(shp_path, columns=shp_param + ['geometry'])
         # Ensure all required fields exist in the GeoDataFrame
         missing_fields = [field for field in shp_param if field not in self.gdf.columns]
@@ -135,7 +136,7 @@ class LineLoader:
         - A unique string identifier for the node.
         """
         if coord not in self.node_dict:
-            self.node_dict[coord] = f'L{self.node_count:X}'
+            self.node_dict[coord] = f'{self.prefix}_{self.node_count:X}'
             self.node_count += 1
         return self.node_dict[coord]
 
@@ -261,7 +262,7 @@ def arr2gdf(attrs_arr, x_arr, y_arr, col_names: list, input_crs: CRS):
     )
     return gdf
 
-def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: gpd.GeoDataFrame, net_prefix) -> gpd.GeoDataFrame:
     """
     Creates edges by processing and merging project, point, and line GeoDataFrames to form network connections.
 
@@ -293,7 +294,7 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     print("Pre-processing Dataframe ...", end='')
     # Sort points within each line_id by prj_length
     prj_gdf = prj_gdf.sort_values(by=['line_id', 'prj_length'])
-    prj_gdf['current_node'] = prj_gdf['line_id'].astype(str) + '-' + prj_gdf['pt_id'].astype(str)
+    prj_gdf['current_node'] = net_prefix + prj_gdf['line_id'].astype(str) + '-' + prj_gdf['pt_id'].astype(str)
 
     pt_gdf.rename(columns={"geometry": "pt_geom"}, inplace=True)
     prj_gdf.rename(columns={"geometry": "prj_geom"}, inplace=True)

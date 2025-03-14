@@ -15,6 +15,7 @@ pt_csv_param = [(r'grid_centroids.csv', 'Id', ('X', 'Y'), 'epsg:32651'),
 # 2. Lines shapefile, preserved fields (list format), direction_field (optional)
 # (only accept one file)
 line_shp_path = r'walk_lines.shp'
+network_prefix = 'W'
 #preserve_fields = ['W_Id', 'Direction']
 preserve_fields = ['Direction']
 direction_field = 'Direction'
@@ -87,7 +88,7 @@ def initialize_lines(line_shp_path: str, preserve_fields: list, target_crs: str)
         - Uses `shp.LineLoader` to load the shapefile and extract topology.
         - Outputs a message when loading is complete.
     """
-    lines = shp.LineLoader(line_shp_path, preserve_fields, target_crs)
+    lines = shp.LineLoader(line_shp_path, preserve_fields, target_crs, network_prefix)
     lines.load_lines()
 
     print("Line File Loaded !!!")
@@ -215,7 +216,7 @@ if __name__ == "__main__":
     del idxs_lst, attrs_lst
 
     print(f"{timestamp()} Building Topology into Shapefile ...")
-    lines = shp.create_edges(prj_gdf, points, lines)
+    lines = shp.create_edges(prj_gdf, points, lines, network_prefix)
 
     print(f"{timestamp()} Creating Edgelist...")
     edges = shp.create_edgelist(lines, direction_field)
