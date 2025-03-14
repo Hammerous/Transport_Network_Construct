@@ -6,11 +6,14 @@ def save_edgelist(filepath: str, df: pd.DataFrame):
         f.write(''.join(f"{src} {end} {length}\n" for src, end, length in df[['src', 'end', 'weight']].values))
 
 # Read file with space as row separator and process chunks
-def pd_edgelist(filename, chunksize=1e5):
+def _pd_edgelist(filename, chunksize=1e5):
     chunk_list = []
     for chunk in pd.read_csv(filename, sep=" ", names=['src', 'end', 'weight'], chunksize=chunksize, engine='c'):
         chunk_list.append(chunk)  # Store each chunk
     return pd.concat(chunk_list, ignore_index=True)  # Merge all chunks
+
+def pd_edgelist(filename):
+    return pd.read_csv(filename, sep=" ", names=['src', 'end', 'weight'], engine='pyarrow')
 
 def pd_intersect_reassign(df, target_nodes, target_field, cost):
     # Boolean mask: Select rows where at least one column is in target_nodes

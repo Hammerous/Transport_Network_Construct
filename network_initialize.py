@@ -2,7 +2,6 @@ import time, os
 import concurrent.futures
 import tools.numpy_cal as npcal
 import tools.shp_process as shp
-#import tools.MeanShift_accelerate as ms_acc
 import tools.file_manage as fm
 
 # 1. Points csv, index field name, coordinate field names, coordinate system’s EPSG serial
@@ -74,14 +73,9 @@ def initialize_lines(line_shp_path: str, preserve_fields: list, target_crs: str)
 
     print("Line File Loaded !!!")
 
-    # lines.gdf.to_file(fm.add_affix(line_shp_path, "_tmp"), driver="ESRI Shapefile", encoding='utf-8')
-    # Save nodes dictionary as a JSON file
-    # with open("line_nodes.json", "w", encoding="utf-8") as f:
-    #     json.dump(lines.node_dict, f, ensure_ascii=False, indent=4)
-
     return {
         'lines': lines.gdf,         # GeoDataFrame containing line geometries
-        'nodes': lines.node_dict    # GeoDataFrame of extracted nodes
+        'nodes': lines.nodes        # GeoDataFrame of extracted nodes
     }
 
 def timestamp():
@@ -122,7 +116,7 @@ if __name__ == "__main__":
     del pt_idx, line_idx, prj_lengths
 
     print(f"{timestamp()} Building Topology into Shapefile ...")
-    lines = shp.create_edges(prj_gdf, points, lines, network_prefix)
+    lines = shp.create_edges(prj_gdf, points, lines)
 
     print(f"{timestamp()} Creating Edgelist...")
     edges = shp.create_edgelist(lines, direction_field)
@@ -131,7 +125,7 @@ if __name__ == "__main__":
     with open(fm.add_prefix(line_shp_path, "topo_").split(".")[0]+".edgelist", 'w') as f:
         f.write(''.join(f"{scr} {end} {length}\n" for scr, end, length in edges))
     
-    # Only write to file if errors occurred
+    # Only write to file if dropping occurred
     if error_ids:
         error_log_file = "error_ids.txt"
         with open(error_log_file, "w") as file:
