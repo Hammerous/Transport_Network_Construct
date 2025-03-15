@@ -1,9 +1,8 @@
 import pandas as pd
 import geopandas as gpd
 from pyproj import CRS
-from shapely.geometry import LineString
 from shapely.strtree import STRtree
-import shapely
+from shapely import linestrings
 
 class PointLoader:
     def __init__(self, pt_csv_params, target_crs, chunksize=10000):
@@ -138,7 +137,7 @@ class LineLoader:
         # Create duplicate rows, keeping the original index, concatenate and then sort by the temporary ordering column
         gdf_geom = pd.concat([gdf_coords, gdf_coords[gdf_coords.index.duplicated(keep='first') & gdf_coords.index.duplicated(keep='last')]]).sort_values('_order')
         self.gdf = gpd.GeoDataFrame(self.gdf.loc[gdf_geom.index.values.reshape(-1, 2)[:,0]], \
-                                    geometry=shapely.linestrings(gdf_geom[['x', 'y']].to_numpy().reshape(-1, 2, 2)), \
+                                    geometry=linestrings(gdf_geom[['x', 'y']].to_numpy().reshape(-1, 2, 2)), \
                                     crs=self.gdf.crs).reset_index(drop=True)
         
         gdf_coords = gdf_coords.drop(columns=['_order']).drop_duplicates(subset=('x', 'y'), keep='first', ignore_index=True)
@@ -193,11 +192,11 @@ def _explode_LineStrings(line_gdf: gpd.GeoDataFrame):
     tmp_gdf = line_gdf.loc[gdf_coords.index.values.reshape(-1, 2)[:,0]]
 
     # Create new LineString geometries from the adjusted coordinates
-    gdf_coords = shapely.linestrings(gdf_coords[['x', 'y']].to_numpy().reshape(-1, 2, 2))
+    gdf_coords = linestrings(gdf_coords[['x', 'y']].to_numpy().reshape(-1, 2, 2))
 
     # Return a new GeoDataFrame with the original data and the newly created LineString geometries
     # CRS (coordinate reference system) is retained from the original GeoDataFrame
-    return gpd.GeoDataFrame(tmp_gdf, geometry=gdf_coords, crs=line_gdf.crs)
+    return gpd.GeoDataFrame(tmp_gdf, geometry=gdf_coords, crs=line_gdf.crs).reset_index(drop=True)
 
 def nearby_lines(lines_geom: gpd.GeoSeries, points_geom: gpd.GeoSeries, buffer_distance: float) -> tuple:
     """
@@ -297,50 +296,53 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     if not required_cols.issubset(line_gdf.columns):
         raise KeyError(f"line_gdf must contain columns: {required_cols}")
 
-    print("Pre-processing Dataframe ...", end='')
+    #print("Pre-processing Dataframe ...", end='')
     # Sort points within each line_id by prj_length
     prj_gdf = prj_gdf.sort_values(by=['line_id', 'prj_length']).drop(columns=['prj_length'])
     
-    pt_gdf.rename(columns={"geometry": "pt_geom"}, inplace=True)
-    prj_gdf.rename(columns={"geometry": "prj_geom"}, inplace=True)
-    cols_rmv = pt_gdf.columns.to_list() + prj_gdf.columns.to_list()
+    pt_gdf[['pt_x', 'pt_y']] = pt_gdf.get_coordinates()
+    pt_gdf.drop(columns=['geometry'], inplace=True)
+    prj_gdf[['prj_x', 'prj_y']] = prj_gdf.get_coordinates()
+    prj_gdf.drop(columns=['geometry'], inplace=True)
 
     merged = prj_gdf.merge(pt_gdf, left_on='pt_id', right_index=True)
-    merged = merged.merge(line_gdf, left_on='line_id', right_index=True)
+    merged = gpd.GeoDataFrame(merged.merge(line_gdf, left_on='line_id', right_index=True), geometry='geometry')
+    cols_rmv = ['src_x', 'src_y', 'end_x', 'end_y']
+    merged[cols_rmv] = merged.get_coordinates().values.reshape(-1, 4)
+    cols_rmv += pt_gdf.columns.to_list() + prj_gdf.columns.to_list()
 
-    print("\rConstructing projected lines ...       ", end='')
+    #print("\rConstructing projected lines ...       ", end='')
     prj_lines_gdf = merged.copy(deep=True)
     prj_lines_gdf['end_encode'] = prj_lines_gdf['this_node']
     prj_lines_gdf['src_encode'] = prj_lines_gdf['this_node'].shift(1)
-    prj_lines_gdf['prev_prj_geom'] = prj_lines_gdf['prj_geom'].shift(1)
-    prj_lines_gdf.loc[prj_lines_gdf.index[1:], 'geometry'] = [
-        LineString([prev, curr]) for prev, curr in prj_lines_gdf[['prev_prj_geom', 'prj_geom']].values[1:]
-    ]
+    prj_lines_gdf[['prev_prj_x', 'prev_prj_y']] = prj_lines_gdf[['prj_x', 'prj_y']].shift(1)
+    prj_lines_gdf.loc[prj_lines_gdf.index[1:], 'geometry'] = \
+        linestrings(prj_lines_gdf[['prev_prj_x', 'prev_prj_y', 'prj_x', 'prj_y']].values.reshape(-1,2,2)[1:])
     prj_lines_gdf = prj_lines_gdf[prj_lines_gdf['line_id'].duplicated(keep='first')]
     prj_lines_gdf.reset_index(drop=True, inplace=True)
-    prj_lines_gdf.drop(columns=cols_rmv + ['prev_prj_geom'], inplace=True)
+    prj_lines_gdf.drop(columns=cols_rmv + ['prev_prj_x', 'prev_prj_y'], inplace=True)
 
-    print("\rConstructing connecting lines ...       ", end='')
+    #print("\rConstructing connecting lines ...       ", end='')
     to_network_gdf = merged.copy(deep=True)
     to_network_gdf['src_encode'] = to_network_gdf['pt_id']
     to_network_gdf['end_encode'] = to_network_gdf['this_node']
-    to_network_gdf['geometry'] = [LineString([pt, prj]) for pt, prj in to_network_gdf[['pt_geom', 'prj_geom']].values]
+    to_network_gdf['geometry'] = linestrings(to_network_gdf[['pt_x', 'pt_y', 'prj_x', 'prj_y']].values.reshape(-1,2,2))
     to_network_gdf.drop(columns=cols_rmv, inplace=True)
 
-    print("\rConstructing start lines ...           ", end='')
+    #print("\rConstructing start lines ...           ", end='')
     first_gdf = merged.copy(deep=True).drop_duplicates(subset='line_id', keep='first')
     modified_line_ids = first_gdf['line_id'].values
     first_gdf['end_encode'] = first_gdf['this_node']
-    first_gdf['geometry'] = [LineString([geom.coords[0], prj]) for geom, prj in first_gdf[['geometry', 'prj_geom']].values]
+    first_gdf['geometry'] = linestrings(first_gdf[['src_x', 'src_y', 'prj_x', 'prj_y']].values.reshape(-1,2,2))
     first_gdf.drop(columns=cols_rmv, inplace=True)
 
-    print("\rConstructing end lines ...             ", end='')
+    #print("\rConstructing end lines ...             ", end='')
     last_gdf = merged.copy(deep=True).drop_duplicates(subset='line_id', keep='last')
     last_gdf['src_encode'] = last_gdf['this_node']
-    last_gdf['geometry'] = [LineString([prj, geom.coords[1]]) for geom, prj in last_gdf[['geometry', 'prj_geom']].values]
+    last_gdf['geometry'] = linestrings(last_gdf[['prj_x', 'prj_y', 'end_x', 'end_y']].values.reshape(-1,2,2))
     last_gdf.drop(columns=cols_rmv, inplace=True)
 
-    print("\rIntegrating lines ...                   ", end='')
+    #print("\rIntegrating lines ...                   ", end='')
     # Drop the original rows that were modified
     line_gdf.drop(index=modified_line_ids, inplace=True)
     merged = pd.concat([line_gdf, prj_lines_gdf, to_network_gdf, first_gdf, last_gdf], ignore_index=True)
@@ -349,7 +351,7 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     # Calculate lengths
     line_gdf['length'] = line_gdf.geometry.length
 
-    print("\rEdges Created !!!                      ", end='\n')
+    #print("\rEdges Created !!!                      ", end='\n')
     return line_gdf
 
 def create_edgelist(lines_attr, direction_field=None):
