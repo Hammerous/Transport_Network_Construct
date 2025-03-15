@@ -1,12 +1,12 @@
 import tools.networkX_manipulate as ntx
 import os, json, time
 
-edgelist_file = 'topo_walk_lines.edgelist'
-od_file = 'OD_file.csv'
-has_direction = False
+edgelist_file = 'Hybrid_Network.edgelist'
+od_file = '_OD_file.csv'
+has_direction = True
 # ntx.numeric_val = 4
-cut_off = 8000
-self_dist = 199.47
+cut_off = 60 * 60
+self_dist = 180
 cpus = 8
 
 def timestamp():
@@ -15,8 +15,8 @@ def timestamp():
 
 if __name__ == '__main__':
     print(f"{timestamp()}Loading Files ...")
-    network = ntx.open_edgelist(edgelist_file, has_direction)
     od_df = ntx.pd_od_readin(od_file)
+    network = ntx.open_edgelist(edgelist_file, has_direction)
 
     o_set = set(od_df['O'].values)
     d_set = set(od_df['D'].values)
@@ -27,6 +27,7 @@ if __name__ == '__main__':
                                                 self_weight=self_dist, cpus=cpus)
     
     print(f"{timestamp()}Saving File ...")
+    ### under the same folder ensured
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),\
         f'{os.path.splitext(os.path.basename(od_file))[0]}-{cut_off}.json'), 'w') as f:
-        json.dump(result_dict, f, ensure_ascii=False, indent=4)
+        json.dump(result_dict, f, ensure_ascii=False)
