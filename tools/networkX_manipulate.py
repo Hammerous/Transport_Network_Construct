@@ -65,7 +65,7 @@ def _single_source_path_lengths(G: nx.MultiDiGraph, ori: str, dests: set, weight
                                 cutoff_threshod: float, self_weight: float = 0):
     if not  G.has_node(ori):
         return('Not Connected to Road Network')
-    # 使用迪杰斯特拉算法找到权重在threshod以内的节点
+    # Note: Dijkstra's algorithm is not guaranteed to work if edge weights are negative or are floating point numbers (overflows and roundoff errors can cause problems).
     reachable_nodes = nx.single_source_dijkstra_path_length(G, ori, cutoff=cutoff_threshod, weight=weight)
     # 取交集并生成新的字典, 保存在 result 中
     return({k: (self_weight if k == ori else round(reachable_nodes[k], numeric_val)) for k in reachable_nodes.keys() & dests})
@@ -111,6 +111,7 @@ def _single_shortest_path(
     This function uses Dijkstra's algorithm. It is a convenience wrapper
     around `networkx.shortest_path`, with exception handling for unsolvable
     paths. If the path is unsolvable, it returns None.
+    Note: Dijkstra's algorithm is not guaranteed to work if edge weights are negative or are floating point numbers (overflows and roundoff errors can cause problems).
 
     Parameters
     ----------
@@ -129,7 +130,11 @@ def _single_shortest_path(
         The node IDs constituting the shortest path and corresponding cost in network
     """
     try:
-        return tuple(nx.single_source_dijkstra(G, orig, target=dest, cutoff=None, weight=weight))
+        #return tuple(nx.single_source_dijkstra(G, orig, target=dest, cutoff=None, weight=weight))
+        #return tuple(nx.single_source_bellman_ford(G, orig, target=dest, weight='weight'))
+        # bidirectional_dijkstra is twice faster (for no surprise) and ensures absolute return of input pairs. 
+        # I am not sure what will happen if path between origin and destination doesn't exist.
+        return tuple(nx.bidirectional_dijkstra(G, orig, target=dest, weight=weight))
     except nx.exception.NetworkXNoPath:  # pragma: no cover
         msg = f"Cannot solve path from {orig} to {dest}"
         print(msg)
