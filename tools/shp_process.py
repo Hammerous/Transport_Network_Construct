@@ -267,7 +267,11 @@ def arr2gdf(attrs_arr, x_arr, y_arr, col_names: list, input_crs: CRS):
     )
     return gdf
 
-def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def create_edges(prj_gdf: gpd.GeoDataFrame,
+                 pt_gdf: gpd.GeoDataFrame,
+                 line_gdf: gpd.GeoDataFrame,
+                 tolerance: float | None,
+                 direction_field: str) -> gpd.GeoDataFrame:
     """
     Creates edges by processing and merging project, point, and line GeoDataFrames to form network connections.
 
@@ -279,15 +283,17 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     - Merges all processed data into a final network GeoDataFrame.
 
     Parameters:
-    - prj_gdf: A GeoDataFrame containing project-related data with columns 'line_id', 'pt_id', and 'prj_length'.
+    - prj_gdf: A GeoDataFrame containing project-related data with columns 'line_id', 'pt_id', 'prj_length', 'to_src','to_end', and 'this_node'.
     - pt_gdf: A GeoDataFrame containing point-related data with geometry.
     - line_gdf: A GeoDataFrame containing line-related data, must have 'src_encode' and 'end_encode' columns.
+    - tolerance: a threshold to merge project point into nearby line endpoint
+    - direction_field: name of direction field
 
     Returns:
     - A GeoDataFrame representing the created edges (lines) with calculated lengths.
     """
     # Validate prj_gdf columns
-    required_cols = {"line_id", "pt_id", "prj_length", "this_node"}
+    required_cols = {"line_id", "pt_id", "prj_length", "to_src", "to_end", "this_node"}
     if not required_cols.issubset(prj_gdf.columns):
         raise KeyError(f"prj_gdf must contain columns: {required_cols}")
    
@@ -311,6 +317,38 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     merged[cols_rmv] = merged.get_coordinates().values.reshape(-1, 4)
     cols_rmv += pt_gdf.columns.to_list() + prj_gdf.columns.to_list()
 
+    #print("\rConstructing connecting lines ...       ", end='')
+    if tolerance:
+        bool_mask = merged['to_src'] > tolerance
+        src_connect = merged[~bool_mask]
+        merged = merged[bool_mask]
+        src_connect['end_encode'] = src_connect['src_encode']
+        src_connect['src_encode'] = src_connect['pt_id']
+        src_connect['geometry'] = linestrings(src_connect[['pt_x', 'pt_y', 'src_x', 'src_y']].values.reshape(-1,2,2))
+        src_connect.drop(columns=cols_rmv, inplace=True)
+        # Check if 'Direction' column exists
+        if direction_field and direction_field in src_connect.columns:
+            src_connect[direction_field] = 0
+
+        bool_mask = merged['to_end'] > tolerance
+        end_connect = merged[~bool_mask]
+        merged = merged[bool_mask]
+        end_connect['src_encode'] = end_connect['pt_id']
+        end_connect['geometry'] = linestrings(end_connect[['pt_x', 'pt_y', 'end_x', 'end_y']].values.reshape(-1,2,2))
+        end_connect.drop(columns=cols_rmv, inplace=True)
+        # Check if 'Direction' column exists
+        if direction_field and direction_field in end_connect.columns:
+            end_connect[direction_field] = 0
+
+    to_network_gdf = merged.copy(deep=True)
+    to_network_gdf['src_encode'] = to_network_gdf['pt_id']
+    to_network_gdf['end_encode'] = to_network_gdf['this_node']
+    to_network_gdf['geometry'] = linestrings(to_network_gdf[['pt_x', 'pt_y', 'prj_x', 'prj_y']].values.reshape(-1,2,2))
+    to_network_gdf.drop(columns=cols_rmv, inplace=True)
+    # Check if 'Direction' column exists
+    if direction_field and direction_field in to_network_gdf.columns:
+        to_network_gdf[direction_field] = 0
+
     #print("\rConstructing projected lines ...       ", end='')
     prj_lines_gdf = merged.copy(deep=True)
     prj_lines_gdf['end_encode'] = prj_lines_gdf['this_node']
@@ -321,13 +359,6 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     prj_lines_gdf = prj_lines_gdf[prj_lines_gdf['line_id'].duplicated(keep='first')]
     prj_lines_gdf.reset_index(drop=True, inplace=True)
     prj_lines_gdf.drop(columns=cols_rmv + ['prev_prj_x', 'prev_prj_y'], inplace=True)
-
-    #print("\rConstructing connecting lines ...       ", end='')
-    to_network_gdf = merged.copy(deep=True)
-    to_network_gdf['src_encode'] = to_network_gdf['pt_id']
-    to_network_gdf['end_encode'] = to_network_gdf['this_node']
-    to_network_gdf['geometry'] = linestrings(to_network_gdf[['pt_x', 'pt_y', 'prj_x', 'prj_y']].values.reshape(-1,2,2))
-    to_network_gdf.drop(columns=cols_rmv, inplace=True)
 
     #print("\rConstructing start lines ...           ", end='')
     first_gdf = merged.copy(deep=True).drop_duplicates(subset='line_id', keep='first')
@@ -345,7 +376,7 @@ def create_edges(prj_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, line_gdf: 
     #print("\rIntegrating lines ...                   ", end='')
     # Drop the original rows that were modified
     line_gdf.drop(index=modified_line_ids, inplace=True)
-    merged = pd.concat([line_gdf, prj_lines_gdf, to_network_gdf, first_gdf, last_gdf], ignore_index=True)
+    merged = pd.concat([line_gdf, prj_lines_gdf, to_network_gdf, first_gdf, last_gdf, src_connect, end_connect], ignore_index=True)
     line_gdf = gpd.GeoDataFrame(merged, geometry="geometry", crs=line_gdf.crs)
 
     # Calculate lengths
@@ -373,9 +404,9 @@ def create_edgelist(lines_attr, direction_field=None):
     # Check if 'Direction' column exists
     if direction_field and direction_field in lines_attr.columns:
         # Filter non-directional edges (Direction == 0)
-        non_directional = lines_attr[lines_attr['Direction'] == 0]
+        non_directional = lines_attr[lines_attr[direction_field] == 0]
         # Filter directional edges (Direction == 1)
-        directional = lines_attr[lines_attr['Direction'] == 1]
+        directional = lines_attr[lines_attr[direction_field] == 1]
         
         # Create swapped edges for non-directional rows
         swapped = non_directional[['end_encode', 'src_encode', 'length']].rename(

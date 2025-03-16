@@ -12,6 +12,8 @@ def compute_proj_length(point_arr: np.ndarray, line_arr: np.ndarray):
     Returns:
     - proj_lengths: (n,) array of projection lengths along the respective lines.
     - proj_points: (n, 2) array of the projected point coordinates on the lines.
+    - dist_to_start: (n,) array of the distance from projection point to the line's start.
+    - dist_to_end: (n,) array of the distance from projection point to the line's end.
     """
     # Extract start and end points of each line
     line_start = line_arr[:, 0, :]  # shape: (n, 2)
@@ -30,7 +32,10 @@ def compute_proj_length(point_arr: np.ndarray, line_arr: np.ndarray):
     # Compute the projected point coordinates on the lines
     proj_points = line_start + proj_lengths[:, np.newaxis] * line_vecs
 
-    return proj_lengths, proj_points
+    dist_to_start = np.linalg.norm(proj_points - line_start, axis=1)  # Distance to start of segment
+    dist_to_end = np.linalg.norm(proj_points - line_end, axis=1)  # Distance to end of segment
+
+    return np.column_stack((proj_lengths, dist_to_start, dist_to_end)), proj_points
 
 def find_nearest_intersect(point_arr: np.ndarray, line_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """

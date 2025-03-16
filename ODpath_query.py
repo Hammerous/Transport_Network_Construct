@@ -18,6 +18,7 @@ if __name__ == '__main__':
     if od_df[['O', 'D']].isna().any().any():
         raise ValueError("Input OD pairs contains missing values.")
     network = ntx.open_edgelist(edgelist_file, has_direction)
+    print("Number of edges loaded:", network.number_of_edges())
 
     print(f"{timestamp()}Querying ...")
     query = ntx.shortest_path(network, od_df, weight='weight', cpus=cpus)

@@ -25,6 +25,10 @@ target_crs = "epsg:32651"
 # 4. Buffer range to intersect line networks
 buffer_range = 1500       # meter
 
+# 5. Merge tolerance to set the projected points at line's endpoints
+# larger tolerance would create more concise topology network
+merge_tol = 1e-2          # meter
+
 def initialize_points(pt_csv_param: tuple, target_crs: str) -> dict:
     """
     Initializes the PointsLoader with CSV parameters, clusters the points based on provided bandwidth and min_block,
@@ -86,7 +90,7 @@ if __name__ == "__main__":
     dirpath = os.path.dirname(os.path.abspath(__file__))
     os.chdir(dirpath)
     start_time = time.time()
-
+    
     print(f"{timestamp()} Initializing Files ...")
     # Use ThreadPoolExecutor to manage threads
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -105,18 +109,18 @@ if __name__ == "__main__":
 
     print(f"{timestamp()} Computing Points to Nearest Lines ...")
     pt_idx, line_idx = shp.nearby_lines(lines.geometry, points.geometry, buffer_range)
-    prj_lengths, prj_gdf = npcal.compute_proj_length(points.geometry.iloc[pt_idx].get_coordinates().to_numpy(),\
+    prj_attrs, prj_gdf = npcal.compute_proj_length(points.geometry.iloc[pt_idx].get_coordinates().to_numpy(),\
                                                      lines.geometry.iloc[line_idx].get_coordinates().to_numpy().reshape(-1,2,2))
 
-    prj_gdf = shp.arr2gdf(prj_lengths, prj_gdf[:,0], prj_gdf[:,1], ['prj_length'], target_crs)
+    prj_gdf = shp.arr2gdf(prj_attrs, prj_gdf[:,0], prj_gdf[:,1], ['prj_length', 'to_src', 'to_end'], target_crs)
     prj_gdf['pt_id'] = points.iloc[pt_idx].index
     prj_gdf['line_id'] = lines.iloc[line_idx].index
     prj_gdf['this_node'] = network_prefix + prj_gdf['line_id'].astype(str) + '-' + prj_gdf['pt_id'].astype(str)
     error_ids = list(points.index.drop(points.index[pt_idx]))
-    del pt_idx, line_idx, prj_lengths
+    del pt_idx, line_idx, prj_attrs
 
     print(f"{timestamp()} Building Topology into Shapefile ...")
-    lines = shp.create_edges(prj_gdf, points, lines)
+    lines = shp.create_edges(prj_gdf.copy(), points.copy(), lines.copy(), merge_tol, direction_field)
 
     print(f"{timestamp()} Creating Edgelist...")
     edges = shp.create_edgelist(lines, direction_field)
@@ -136,5 +140,5 @@ if __name__ == "__main__":
     nodes.to_file(fm.add_affix(line_shp_path, "_nodes"), driver="ESRI Shapefile", encoding='utf-8')
     prj_gdf.to_file(fm.add_affix(line_shp_path, "_prjs"), driver="ESRI Shapefile", encoding='utf-8')
     lines.to_file(fm.add_prefix(line_shp_path, "topo_"), driver="ESRI Shapefile", encoding='utf-8')
-
+    
     print(f"{timestamp()} Program ends in {time.time() - start_time:.2f} seconds, go check files in this script's folder")

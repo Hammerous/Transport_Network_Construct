@@ -4,7 +4,7 @@ import os, json, time
 edgelist_file = 'Hybrid_Network.edgelist'
 od_file = '_OD_file.csv'
 has_direction = True
-# ntx.numeric_val = 4
+ntx.numeric_val = 1
 cut_off = 60 * 60
 self_dist = 180
 cpus = 8
@@ -17,6 +17,7 @@ if __name__ == '__main__':
     print(f"{timestamp()}Loading Files ...")
     od_df = ntx.pd_od_readin(od_file)
     network = ntx.open_edgelist(edgelist_file, has_direction)
+    print("Number of edges loaded:", network.number_of_edges())
 
     o_set = set(od_df['O'].values)
     d_set = set(od_df['D'].values)
