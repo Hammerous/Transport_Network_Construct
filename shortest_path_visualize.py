@@ -9,8 +9,8 @@ pt_gdf = [
     ("walk_lines_pts.shp", "id"),
     ("walk_lines_nodes.shp", "Id"),
     ("walk_lines_prjs.shp", "this_node"),
-    ("bus_lines_nodes.shp", "Id"),
-    ("bus_lines_prjs.shp", "this_node"),
+    ("bus_lines_fixed_nodes.shp", "Id"),
+    ("bus_lines_fixed_prjs.shp", "this_node"),
     ("subway_lines_nodes.shp", "Id"),
     ("subway_lines_prjs.shp", "this_node")
     ]

@@ -8,7 +8,7 @@ import tools.file_manage as fm
 # (accept multiple inputs) 
 # (Although it is rationally acceptable without a point input, detective points are requested for this mission)
 pt_csv_param = [(r'grid_centroids.csv', 'Id', ('X', 'Y'), 'epsg:32651'),
-                (r'bus_stops.csv', 'Bus_Id', ('X', 'Y'), 'epsg:4326'),
+                (r'bus_stops_fixed.csv', 'Bus_Id', ('X', 'Y'), 'epsg:32651'),
                 (r'subway_stops.csv', 'Sub_Id', ('X', 'Y'), 'epsg:32651')]
                 
 # 2. Lines shapefile, preserved fields (list format), direction_field (optional)
