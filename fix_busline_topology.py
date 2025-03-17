@@ -16,6 +16,7 @@ def make_unique_by_drift(lines_geom, drift):
     # Initialize an empty set to track visited elements
     visited = np.empty(shape=(0,2),dtype=float)
     new_geom = []
+    half_drift = drift / 2
     # Iterate through each array in the list
     for line in lines_geom:
         print(f"\r{len(new_geom)}/{lines_geom.shape[0]}", end='')
@@ -25,7 +26,8 @@ def make_unique_by_drift(lines_geom, drift):
         if target_elements.shape[0]:
             modified = True
             angle = np.random.uniform(0, 2 * np.pi)
-            drift_vec = np.array((drift/2 * np.cos(angle), drift * np.sin(angle)))
+            drift_value = half_drift * (np.random.random() * 0.1 + 1)
+            drift_vec = np.array((drift_value * np.cos(angle), drift_value * np.sin(angle)))
             arr[target_elements] += drift_vec
         
         # Find unique rows, their indices, and counts per unique coordinate.
@@ -38,7 +40,7 @@ def make_unique_by_drift(lines_geom, drift):
             modified = True
             random_angles = np.random.choice(np.linspace(0, 2*np.pi, num_duplicates * 10), size=num_duplicates, replace=False)
             # Compute the offset vector (of magnitude drift/2) for each duplicate.
-            drift_vec = drift/2 * np.column_stack((np.cos(random_angles), np.sin(random_angles)))
+            drift_vec = half_drift * np.column_stack((np.cos(random_angles), np.sin(random_angles)))
             # Add the offset only to rows that are duplicates.
             arr[duplicate_mask] += drift_vec
         
