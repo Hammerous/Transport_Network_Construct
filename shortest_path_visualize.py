@@ -16,7 +16,7 @@ pt_gdf = [
     ]
 
 # OD path file
-od_df_path = 'OD_file_in_Hybrid_Network.csv'  # Replace with the path to your CSV file
+od_df_path = 'OD_file_in_Hybrid_Network_simplified.csv'  # Replace with the path to your CSV file
 
 def num_worker_find(num_workers):
     return min(mp.cpu_count(), num_workers) if isinstance(num_workers, int) and num_workers > 0 else mp.cpu_count()
