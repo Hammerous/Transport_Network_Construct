@@ -1,5 +1,4 @@
 import geopandas as gpd
-from pyproj import CRS
 import pandas as pd
 
 bus_lines = gpd.read_file("bus_lines_fixed.shp")
@@ -31,6 +30,10 @@ for _, line in bus_lines.iterrows():
 print()
 
 # Save to a new shapefile
-bus_stops_corrected.to_file("bus_stops_fixed.shp")
+# bus_stops_corrected.to_file("bus_stops_fixed.shp")
+
+bus_stops_corrected[['X', 'Y']] = bus_stops_corrected.get_coordinates()
+# Save the GeoDataFrame as a CSV file without the index column
+bus_stops_corrected.drop(columns=['geometry']).to_csv("bus_stops_fixed.csv", index=False, encoding='utf-8-sig')
 
 print("Corrected bus stops saved successfully.")

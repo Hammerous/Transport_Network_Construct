@@ -63,7 +63,7 @@ def pd_od_readin(filename):
 
 def _single_source_path_lengths(G: nx.MultiDiGraph, ori: str, dests: set, weight: str,
                                 cutoff_threshod: float, self_weight: float = 0):
-    if not  G.has_node(ori):
+    if not G.has_node(ori):
         return('Not Connected to Road Network')
     # Note: Dijkstra's algorithm is not guaranteed to work if edge weights are negative or are floating point numbers (overflows and roundoff errors can cause problems).
     reachable_nodes = nx.single_source_dijkstra_path_length(G, ori, cutoff=cutoff_threshod, weight=weight)
