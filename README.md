@@ -457,6 +457,7 @@ flowchart TD
     PQ --> PQ_OUT[• JSON • CSV]:::output
 
     SIMPLIFIED_OUT --> SQ[ODpath_simplified_query.py]
+    SIMPLIFIED_OUT -->|direct query| PQ[paths_query.py / ODpath_query.py]
     MERGE_JSON --> SQ
     SQ --> SQ_OUT[CSV with expanded paths]:::output
   end
