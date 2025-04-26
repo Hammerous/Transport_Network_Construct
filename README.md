@@ -385,7 +385,7 @@ No extra parameters are required unless you wish to tweak simplification rules (
 
 ### What it does
 1. Reads multiple point-layer shapefiles (nodes, projected points, etc.).  
-2. Reads the path CSV created in § 4.3.  
+2. Reads the path CSV created in `ODpath_query.py`/`ODpath_simplified_query.py`.  
 3. Reconstructs each path as a **LineString** using the node coordinates.  
 4. Outputs a shapefile named like the CSV (`…_simplified.shp`).
 
@@ -409,11 +409,6 @@ A shapefile containing one feature per OD pair with attributes from the CSV plus
 * **Unit consistency** is crucial: all underlying edge weights should be in **meters** (after initialization) or **seconds** (after hybrid joining) after conversion.  
 * Regenerate the merge-dictionary (`*.json`) whenever you change or re-simplify the network.  
 * Visualisation script assumes **every node ID** appearing in the CSV exists in one of the provided point layers.
-
----
-
-**Next Step:** You now have a full pipeline from raw GIS layers → multimodal network → queried paths → GIS-ready lines.  
-Feel free to integrate Section 4 outputs into dashboards, accessibility indicators, or further analyses!
 
 ---
 
