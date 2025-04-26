@@ -399,7 +399,7 @@ flowchart TD
   end
 
   %% ====== NETWORK INITIALIZATION ======
-  subgraph NetworkInitialization["1. Network Initialization"]
+  subgraph NetworkInitialization["Network Initialization"]
     WL --> NI[network_initialize.py]
     FBT_OUT --> NI
     BSA_OUT --> NI
@@ -420,7 +420,7 @@ flowchart TD
   end
 
   %% ====== PATH QUERIES ======
-  subgraph QueryUtilities["2. Network Query Utilities"]
+  subgraph QueryUtilities["Network Query Utilities"]
     JOIN_OUT -->|direct query| PQ[paths_query.py / ODpath_query.py]
     PQ --> PQ_OUT[• JSON • CSV]:::output
 
