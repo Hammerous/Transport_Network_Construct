@@ -185,8 +185,9 @@ A CSV named `<od_file>_in_<edgelist_file>.csv`, e.g.
 |--------|-------------|
 | `O` | Origin node ID (copied from input). |
 | `D` | Destination node ID. |
+| `dist` | Total accumulated distance. |
 | `path` | Semicolon-separated list of node IDs representing the shortest route. |
-| `length` | Total accumulated weight. |
+
 
 > You can open the file in any spreadsheet or import it into GIS software for further visualization.
 
@@ -339,7 +340,7 @@ No extra parameters are required unless you wish to tweak simplification rules (
 | Column | Meaning |
 |--------|---------|
 | `O`, `D` | Original origin & destination IDs. |
-| `dist`/`length` | Travel cost (same units as network weight). |
+| `dist` | Travel cost (same units as network weight). |
 | `path` | **Full node sequence** after edge expansion. |
 
 ---
@@ -445,4 +446,12 @@ flowchart TD
 
 ## Author and Attribution
 
-This project was created by **Hammerous** as part of an urban research project at Tongji University.  
+This project was created by **Hammerous** as part of an urban research project at Tongji University.   
+
+---
+
+## References
+
+- Boeing, G. (2024). *Modeling and Analyzing Urban Networks and Amenities with OSMnx*. [View Paper](https://geoffboeing.com/publications/osmnx-paper/)
+- Gillies, S., van der Wel, C., Van den Bossche, J., Taves, M. W., Arnott, J., Ward, B. C., et al. (2025). *Shapely (Version 2.1.0) [Computer software]*. [DOI](https://doi.org/10.5281/zenodo.5597138)
+- Jordahl, K., Van den Bossche, J., Fleischmann, M., Wasserman, J., McBride, J., Gerard, J., et al. (2020, July 15). *geopandas/geopandas: v0.8.1 (Version v0.8.1)*. Zenodo. [DOI](http://doi.org/10.5281/zenodo.3946761)
