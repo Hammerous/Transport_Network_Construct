@@ -287,25 +287,61 @@ Once the hybrid network is built (Section&nbsp;1 in Basic Workflow), you can enr
 
 ---
 
-## 1. `network_join.py` — Build a Hybrid Network
+## 1. `network_join.py` — Assemble a Hybrid, Time-Weighted Network
 
-### What it does
-1. Reads separate edgelists (`walk`, `bus`, `subway`, transfers).  
-2. Reads stop CSVs to identify transfer nodes.  
-3. Converts raw lengths into **travel times** by dividing by mode-specific speeds.  
-4. Adds fixed **wait times** at stops/intersections.  
-5. Concatenates everything and writes `Hybrid_Network.edgelist`.
+`network_join.py` fuses the individual mode networks (walk, bus, subway) into **one routable graph** whose edge weights represent *travel time* (length / speed + wait penalty).
 
-### Key parameters
-| Variable | Meaning | Default |
-|----------|---------|---------|
-| `walk_speed` | Walking speed (m s⁻¹). | `4 km/h` |
-| `bus_speed`, `sub_speed` | In-vehicle speeds. | `30 km/h`, `40 km/h` |
-| `bus_wait_time`, `sub_wait_time` | Fixed boarding penalty (seconds). | `300` |
-| File paths | Edit paths near the top if your filenames differ. | — |
+### Processing Pipeline
+
+| # | Stage | Key Helper | Result |
+|---|-------|-----------|--------|
+| 1 | **Load** mode‐specific edgelists and stop tables | `pd_edgelist`, `pd.read_csv` | Pandas DataFrames in memory |
+| 2 | **Convert length → time** using mode speeds | `pd_avg_weight` | Edge weights become seconds |
+| 3 | **Add wait/transfer penalties** at stop nodes | `pd_intersect_reassign` | Boarding cost embedded |
+| 4 | **Concatenate** all edges | `pd.concat` | One master DataFrame |
+| 5 | **Save** to disk | `save_edgelist` | `Hybrid_Network.edgelist` |
+
+### Mandatory Inputs
+
+| File | Purpose |
+|------|---------|
+| `topo_walk_lines.edgelist` | Pedestrian network from Section 1 |
+| `topo_bus_lines_fixed.edgelist` | Bus network (after topology fix) |
+| `topo_subway_lines.edgelist` | Subway track network |
+| `subway_stop_trans.edgelist` | In-station transfer connectors |
+| `subway_stops.csv` (`Sub_Id`) | Subway stop IDs for wait assignment |
+| `bus_stops_fixed.csv` (`Bus_Id`) | Bus stop IDs for wait assignment |
+
+*(Change the paths at the top of the script if your filenames differ.)*
+
+### Tunable Parameters
+
+| Variable | Meaning | Default | Typical Range |
+|----------|---------|---------|---------------|
+| `walk_speed` | Walking speed (m s⁻¹) | **1.11** (=4 km h⁻¹) | 0.8 – 1.5 |
+| `bus_speed`  | In-vehicle bus speed | **8.33** (=30 km h⁻¹) | 6 – 12 |
+| `sub_speed`  | In-vehicle subway speed | **11.11** (=40 km h⁻¹) | 10 – 20 |
+| `bus_wait_time` | Boarding penalty at each bus stop (s) | **300** | 60 – 600 |
+| `sub_wait_time` | Boarding penalty at each subway stop (s) | **300** | 120 – 600 |
+| `joined_name` | Output filename | `Hybrid_Network.edgelist` | Any |
+
+> **Note** Speeds are specified in km h⁻¹ in comments but converted to m s⁻¹ in code  
+> (`xx * 1e3 / 3600`).  If your edge weights are *already* time in seconds, set the speeds to `1`.
 
 ### Output
-`Hybrid_Network.edgelist` — a single, **time-weighted** network ready for routing.
+
+`Hybrid_Network.edgelist` – plain-text table
+
+```
+src_node   dst_node   weight  (seconds)
+A          B          42.7
+…
+```
+
+Ready for:
+
+* **`network_simplify.py`** (topological collapsing)  
+* **`paths_query.py` / `ODpath_query.py`** (routing)  
 
 ---
 
