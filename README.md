@@ -442,3 +442,7 @@ flowchart TD
 ```
 
 ---
+
+## Author and Attribution
+
+This project was created by **Hammerous** as part of an urban research project at Tongji University.  
