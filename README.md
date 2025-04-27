@@ -59,9 +59,9 @@ It mainly:
    - A unique ID field.
    - X and Y coordinate fields.
    - The coordinate system specified by EPSG code.
-These points represent Points of Interest (POIs) — such as centroids, bus stops, or subway entrances — that are not originally part of the line network.
+   - These points represent Points of Interest (POIs) — such as centroids, bus stops, or subway entrances — that are not originally part of the line network.
 
-> Important:
+> **Important:**
 > These points are explicitly anchored onto the road network during initialization.
 > If the set of anchoring points changes later (e.g., adding new bus stops, adjusting POI locations), you must re-run the network initialization to correctly rebuild the network topology and edgelists.
 
