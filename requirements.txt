@@ -1,0 +1,5 @@
+pandas==2.2.2
+geopandas==1.0.1
+shapely==2.0.5
+networkx==3.3
+numpy==1.24.4

@@ -29,6 +29,23 @@ flowchart TD
 
 ---
 
+# Setup Environment
+
+Before running the toolbox, install the necessary Python packages.  
+This project was developed under:
+
+> pandas 2.2.2, geopandas 1.0.1, shapely 2.0.5, networkx 3.3, numpy 1.24.4
+
+To install all required packages at once, use:
+
+```bash
+pip install -r requirements.txt
+```
+
+This ensures compatibility with the provided scripts across all workflow stages.
+
+---
+
 
 ## Contents
 
