@@ -59,6 +59,11 @@ It mainly:
    - A unique ID field.
    - X and Y coordinate fields.
    - The coordinate system specified by EPSG code.
+These points represent Points of Interest (POIs) — such as centroids, bus stops, or subway entrances — that are not originally part of the line network.
+
+> Important:
+> These points are explicitly anchored onto the road network during initialization.
+> If the set of anchoring points changes later (e.g., adding new bus stops, adjusting POI locations), you must re-run the network initialization to correctly rebuild the network topology and edgelists.
 
 2. **Load Line Shapefile**  
    A single shapefile is used to load linear features. You can optionally preserve specific attribute fields (e.g., 'Direction') for later use.
@@ -347,54 +352,178 @@ Ready for:
 
 ## 2. `network_simplify.py` — Topological Simplification
 
-### What it does
-1. Loads `Hybrid_Network.edgelist` into a directed multigraph.  
-2. Applies a modified **OSMnx** routine to drop intermediate degree-2 nodes while preserving geometry and cumulative weights.  
-3. Writes two files:  
-   * `Hybrid_Network_simplified.edgelist` — lean graph.  
-   * `Hybrid_Network_simplified.json` — a dictionary mapping each new edge to the full list of original nodes it replaced.
+`network_simplify.py` reduces the complexity of a graph by removing unnecessary intermediate nodes (typically degree-2 nodes), while preserving connectivity and cumulative travel cost.
 
-No extra parameters are required unless you wish to tweak simplification rules (see script comments).
+### Processing Pipeline
+
+| # | Stage | Key Helper | Result |
+|---|-------|------------|--------|
+| 1 | **Load** full network edgelist | `open_edgelist` | Directed multigraph loaded |
+| 2 | **Identify** simplifiable chains | `_get_paths_to_simplify` | List of node sequences |
+| 3 | **Merge** intermediate nodes and sum weights | `simplify_graph` | Leaner graph |
+| 4 | **Save** outputs | `nx.write_weighted_edgelist`, `json.dump` | Simplified edgelist + node-merge map |
+
+### Mandatory Inputs
+
+| File | Purpose |
+|------|---------|
+| `Hybrid_Network.edgelist` | Full network before simplification |
+
+*(Filename can be modified by changing the `edgelist_file` variable.)*
+
+### Output Files
+
+| File | Format | Description |
+|------|--------|-------------|
+| `Hybrid_Network_simplified.edgelist` | `.edgelist` | Simplified network with consolidated edges |
+| `Hybrid_Network_simplified.json` | `.json` | Mapping dictionary of merged paths per edge |
+
+Example of JSON structure:
+
+```json
+{
+  "W_71535W_71534": "W_71535,W_17313,W_71534",
+  "W_72970W_71546": "W_72970,W_71546"
+}
+```
+
+Each key-value pair indicates how one collapsed edge covers multiple original nodes.
+
+### Key Behavior
+
+| Feature | Description |
+|---------|-------------|
+| Degree-2 node removal | Chains between endpoints are merged into single edges. |
+| Weight preservation | By default, edge `weight` is **summed** over the merged segments. |
+| Ring removal | Small isolated loops without intersections can optionally be deleted. |
+
+### Tunable Parameters (Advanced)
+
+These are **only modified inside the script**, if needed:
+
+| Parameter | Meaning | Default |
+|-----------|---------|---------|
+| `remove_rings` | Remove trivial chordless cycles | `True` |
+| `edge_attr_aggs` | How to aggregate attributes across merged edges | `{ "weight": sum }` |
+
+> **Tip:**  
+> Always use the simplified `.edgelist` for faster queries if your application does not require preserving every small geometric detail.
 
 ---
 
-## 3. `ODpath_simplified_query.py` — Path Query with Edge Expansion
+## 3. `ODpath_simplified_query.py` — OD Path Query with Edge Expansion
 
-### What it does
-1. Loads the **simplified** edgelist and the **merge-dictionary** JSON.  
-2. Runs shortest-path search for OD pairs from `OD_file.csv`.  
-3. Expands each simplified edge back into its original node chain using the JSON, ensuring no detail is lost.  
-4. Saves an augmented CSV (`OD_file_in_Hybrid_Network_simplified.csv` by default).
+`ODpath_simplified_query.py` retrieves shortest paths based on the **simplified network**, then **recovers the full detailed node sequences** by expanding merged edges using a pre-built dictionary.
 
-### Adjustable parameters
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `cpus` | Parallel workers. | `8` |
-| Filenames | Paths to the simplified files and OD CSV. | — |
+### Processing Pipeline
+
+| # | Stage | Key Helper | Result |
+|---|-------|------------|--------|
+| 1 | **Load** simplified network and merge map | `open_edgelist`, `json.load` | Graph and mapping ready |
+| 2 | **Read** OD pairs | `pd_od_readin` | Origin–destination DataFrame |
+| 3 | **Compute** shortest paths (on simplified edges) | `shortest_path` | Fast preliminary results |
+| 4 | **Expand** merged edges into full node sequences | In-script recovery | Restored fine-grained paths |
+| 5 | **Save** results | `save_paths` | Augmented CSV |
+
+### Mandatory Inputs
+
+| File | Purpose |
+|------|---------|
+| `Hybrid_Network_simplified.edgelist` | Simplified network for routing |
+| `Hybrid_Network_simplified.json` | Merge mapping from collapsed edges |
+| `OD_file.csv` | OD pair table with `O`, `D` columns |
+
+*(Paths are set at the top of the script.)*
+
+### Output Files
+
+| File | Format | Description |
+|------|--------|-------------|
+| `OD_file_in_Hybrid_Network_simplified.csv` | `.csv` | Expanded paths with full node details |
 
 ### Output Columns
+
 | Column | Meaning |
 |--------|---------|
-| `O`, `D` | Original origin & destination IDs. |
-| `dist` | Travel cost (same units as network weight). |
-| `path` | **Full node sequence** after edge expansion. |
+| `O` | Origin node ID |
+| `D` | Destination node ID |
+| `dist` | Total accumulated travel cost (seconds) |
+| `path` | Full node sequence after edge expansion |
+
+Example of a `path` field:
+
+```
+['12126', 'W148636-12126', 'W_71535', 'W_17313', ..., '12125']
+```
+
+Paths are automatically deduplicated while preserving correct traversal order.
+
+### Adjustable Parameters
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `cpus` | Number of parallel worker processes | `8` |
+| `has_direction` | Treat network as directed (True) or undirected (False) | `True` |
+| File paths | Input/output filenames | Script-top editing |
+
+> **Tip:**  
+> If you change the simplification process, **you must regenerate** both the simplified `.edgelist` and the `.json` before running this query script.
 
 ---
 
-## 4. `shortest_path_visualize.py` — Create Path Geometries
+## 4. `shortest_path_visualize.py` — Generate Path Geometries for Mapping
 
-### What it does
-1. Reads multiple point-layer shapefiles (nodes, projected points, etc.).  
-2. Reads the path CSV created in `ODpath_query.py`/`ODpath_simplified_query.py`.  
-3. Reconstructs each path as a **LineString** using the node coordinates.  
-4. Outputs a shapefile named like the CSV (`…_simplified.shp`).
+`shortest_path_visualize.py` converts the OD path results (node sequences) into **spatial LineString geometries**, suitable for GIS visualization and further spatial analysis.
 
-### Required edits
-- **`pt_gdf` list** at the top must list every point layer `(path, id_field)` used in your network.  
-- **`od_df_path`** should point to the path CSV to convert.
+### Processing Pipeline
+
+| # | Stage | Key Helper | Result |
+|---|-------|------------|--------|
+| 1 | **Load** point shapefiles | `read_shapefiles_parallel` | Combined lookup GeoDataFrame |
+| 2 | **Read** OD paths CSV | `pd.read_csv` | Table with paths as node sequences |
+| 3 | **Construct** LineStrings | `create_geometry` | Geometries reconstructed in parallel |
+| 4 | **Save** output | `GeoDataFrame.to_file` | Shapefile for GIS software |
+
+### Required Inputs
+
+| File | Purpose |
+|------|---------|
+| Multiple node-related shapefiles | Point coordinates needed to reconstruct paths |
+| OD path CSV | The query output containing `path` field |
+
+- **Point Shapefiles**: Must include all possible node IDs referred to in the path CSV.  
+  Format: list of tuples `(shapefile path, id_field name)`.
+
+- **Path CSV**:  
+  - Must include columns: `O`, `D`, `dist`, and `path` (where `path` is a list of node IDs).
+  - Generated from either `ODpath_query.py` or `ODpath_simplified_query.py`.
+
+### Required Manual Edits Before Running
+
+| Setting | What to Edit | Example |
+|---------|--------------|---------|
+| `pt_gdf` | List of all point shapefiles and their ID columns | `[("walk_lines_pts.shp", "id"), ...]` |
+| `od_df_path` | Path to OD result CSV file | `'OD_file_in_Hybrid_Network_simplified.csv'` |
+
+> **Tip:**  
+> All node IDs in the `path` list must match the ID fields in the shapefiles.
 
 ### Output
-A shapefile containing one feature per OD pair with attributes from the CSV plus geometry—ready for QGIS/ArcGIS.
+
+| File | Format | Description |
+|------|--------|-------------|
+| `<OD file name>.shp` | `.shp` | One feature per OD pair, LineString geometry, with attributes: `O`, `D`, `dist` |
+
+The output shapefile will inherit the CRS from the loaded shapefiles.
+
+Example record:
+
+| O | D | dist | geometry |
+|---|---|------|----------|
+| 12126 | 11994 | 1016.82 | LineString(…) |
+
+> **Note:**  
+> Ensure your shapefiles and path CSV are updated and matched properly before running.
 
 ---
 
@@ -478,7 +607,7 @@ flowchart TD
 
 ## Author and Attribution
 
-This project was created by **Hammerous** as part of an urban research project at Tongji University.   
+This toolbox was created by **Hammerous** as part of an urban research project at Tongji University.   
 
 ---
 
