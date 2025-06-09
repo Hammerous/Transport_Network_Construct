@@ -49,7 +49,7 @@ This ensures compatibility with the provided scripts across all workflow stages.
 
 ## Contents
 
-1. [Network Initialisation](#1-network-initialization)  
+1. [Network Initialization](#1-network-initialization)  
 2. [Network Query Utilities](#2-network-query-utilities)  
 3. [Pre-processing Utilities](#pre-processing-utilities) 
 4. [Post-Processing Utilities](#post-processing-utilities)
@@ -81,6 +81,18 @@ It mainly:
 > **Important:**
 > These points are explicitly anchored onto the road network during initialization.
 > If the set of anchoring points changes later (e.g., adding new bus stops, adjusting POI locations), you must re-run the network initialization to correctly rebuild the network topology and edgelists.
+
+> **ERROR Info & Troubleshooting:**
+> - **Error Message**:  
+> `"Duplicate IDs found in the combined GeoDataFrame."`
+> - **What It Means**:  
+> This error indicates that the imported CSV files contain **duplicate values** in the field you've specified as the **unique ID**.
+> - **How to Fix It**:  
+> Please **ensure that the ID field contains only unique values** across all input CSV files.  
+> The responsibility for providing unique identifiers lies with the user.
+
+
+
 
 2. **Load Line Shapefile**  
    A single shapefile is used to load linear features. You can optionally preserve specific attribute fields (e.g., 'Direction') for later use.
