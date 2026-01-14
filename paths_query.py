@@ -1,8 +1,8 @@
 import tools.networkX_manipulate as ntx
 import os, json, time
 
-edgelist_file = 'Hybrid_Network.edgelist'
-od_file = '_OD_file.csv'
+edgelist_file = 'Network_Construct\Hybrid_Network_simplified.edgelist'
+od_file = 'Network_Construct\_OD_file.csv'
 has_direction = True
 ntx.numeric_val = 1
 cut_off = 60 * 60

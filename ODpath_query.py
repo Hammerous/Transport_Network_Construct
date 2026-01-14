@@ -1,7 +1,7 @@
 import tools.networkX_manipulate as ntx
 import time, os
 
-edgelist_file = 'Hybrid_Network.edgelist'
+edgelist_file = 'Network_Construct\topo_walk_lines.shp'
 od_file = 'OD_file.csv'
 has_direction = True
 cpus = 2
